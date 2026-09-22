@@ -15,9 +15,16 @@ Confirmed from Google's public docs (ai.google.dev/gemini-api):
     "type" values are uppercase (STRING, OBJECT, ARRAY, NUMBER, INTEGER, BOOLEAN)
   - Response: candidates[0].content.parts[0].text holds the JSON string
 
-GEMINI_MODEL in config.py may need updating if Google renames/retires the
-free-tier Flash model by the time this runs -- check
-https://ai.google.dev/gemini-api/docs/models for the current name first.
+GEMINI_MODEL in config.py is an alias ("gemini-flash-latest"), not a pinned
+version -- see the README's Gemini-404 troubleshooting section if that
+alias ever stops resolving.
+
+A first real run also surfaced 503 "Service Unavailable" from Gemini's
+free tier under load -- retried here with real exponential backoff (the
+original version used a flat delay, which wasn't enough to let a transient
+503 clear). 429 (rate limit) and 500/502/503/504 (server-side, transient)
+are retried; anything else (e.g. 400 for a malformed request) fails fast
+since retrying it would just waste attempts on a non-transient error.
 """
 from __future__ import annotations
 
@@ -27,8 +34,9 @@ import time
 import httpx
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-MAX_RETRIES = 5
-BACKOFF_BASE_SECONDS = 3.0
+MAX_RETRIES = 6
+BACKOFF_BASE_SECONDS = 4.0
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def generate_json(
@@ -40,9 +48,9 @@ def generate_json(
     max_output_tokens: int = 4096,
 ) -> dict:
     """Calls Gemini with the response forced into `schema`. Retries with
-    backoff on 429 -- expected to fire fairly often, since the free tier's
-    per-minute rate limit is the main thing a 100-company run will bump
-    into (not a spend cap, since there isn't one to hit)."""
+    exponential backoff on rate-limit (429) and transient server errors
+    (500/502/503/504) -- both are expected fairly often on the free tier
+    under load, not signs of a broken request."""
     url = f"{BASE_URL}/models/{model}:generateContent?key={api_key}"
 
     body: dict = {
@@ -61,20 +69,38 @@ def generate_json(
         for attempt in range(MAX_RETRIES):
             try:
                 resp = client.post(url, json=body)
-                if resp.status_code == 429:
+
+                if resp.status_code in RETRYABLE_STATUS_CODES:
                     wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
                     print(
-                        f"  Gemini 429 (free-tier rate limit), backing off "
-                        f"{wait:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})"
+                        f"  Gemini {resp.status_code} ({resp.reason_phrase}), "
+                        f"backing off {wait:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})"
+                    )
+                    last_error = httpx.HTTPStatusError(
+                        f"{resp.status_code} {resp.reason_phrase}", request=resp.request, response=resp
                     )
                     time.sleep(wait)
                     continue
+
                 resp.raise_for_status()
                 data = resp.json()
                 text = data["candidates"][0]["content"]["parts"][0]["text"]
                 return json.loads(text)
-            except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError) as exc:
+
+            except (KeyError, IndexError, json.JSONDecodeError) as exc:
+                # Malformed/unexpected response shape -- still worth a
+                # retry (transient truncation, etc.) but not a network error.
                 last_error = exc
-                time.sleep(BACKOFF_BASE_SECONDS)
+                wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
+                time.sleep(wait)
+            except httpx.HTTPStatusError as exc:
+                # A non-retryable status (e.g. 400 bad request, 401/403
+                # auth) -- fail fast rather than burn through attempts.
+                raise RuntimeError(f"Gemini call failed (non-retryable): {exc}") from exc
+            except httpx.HTTPError as exc:
+                # Network-level failure (timeout, connection reset) -- retry.
+                last_error = exc
+                wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
+                time.sleep(wait)
 
     raise RuntimeError(f"Gemini call failed after {MAX_RETRIES} attempts: {last_error}")
