@@ -18,7 +18,7 @@ from __future__ import annotations
 import time
 
 from src.config import Secrets, clamp_company_count
-from src.crustdata_client import Contact, CrustdataClient
+from src.crustdata_client import CANDIDATES_PER_SEARCH, CREDITS_PER_RESULT, Contact, CrustdataClient
 from src.discovery import Company, rank_companies
 from src.drafting import DraftedMessages, draft_company_messages
 from src.qa import validate_contact_messages
@@ -62,7 +62,8 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
     print(f"Discovery returned {len(companies)} companies")
 
     projected_requests = len(companies) * 2  # 2 person/search calls per company (HR/TA, Ops/SCM)
-    projected_credits = projected_requests * 1 * 0.03  # worst case: every call returns its 1 allowed result
+    # worst case: every call returns its full CANDIDATES_PER_SEARCH results
+    projected_credits = projected_requests * CANDIDATES_PER_SEARCH * CREDITS_PER_RESULT
     print(
         f"Projected Crustdata requests: {projected_requests} "
         f"(up to ~{projected_credits:.2f} credits, since person/search bills per result returned)"

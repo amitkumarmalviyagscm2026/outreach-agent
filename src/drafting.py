@@ -67,10 +67,55 @@ be slightly longer, but stay professional and specific, not generic.
 """
 
 
+_SHORTEN_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {"connection_note": {"type": "STRING"}},
+    "required": ["connection_note"],
+}
+# Aim below the hard limit so the rewrite doesn't land at 301 again.
+_SHORTEN_TARGET_CHARS = 270
+
+
 @dataclass(frozen=True)
 class DraftedMessages:
     connection_note: str
     follow_up_message: str
+
+
+def _shorten_note(note: str, api_key: str) -> str:
+    """One extra Gemini call to bring an over-limit note under the cap.
+    Only runs when a note is actually too long, so it costs nothing on
+    the common path."""
+    prompt = (
+        f"Shorten this LinkedIn connection note to at most {_SHORTEN_TARGET_CHARS} "
+        "characters. Keep the same facts, names and tone. Do NOT add any new "
+        "facts or claims. It must remain complete sentences -- rewrite, don't "
+        f"just cut it off.\n\nNote:\n{note}"
+    )
+    data = generate_json(GEMINI_MODELS, prompt, _SHORTEN_SCHEMA, api_key)
+    return data["connection_note"]
+
+
+def _enforce_length(role: str, msgs: DraftedMessages, api_key: str) -> DraftedMessages:
+    """If a note is over the hard limit, try one rewrite. If the rewrite
+    fails or is still too long, keep the original -- the QA gate will flag
+    it for a human rather than this code silently truncating mid-sentence."""
+    if len(msgs.connection_note) <= CONNECTION_NOTE_MAX_CHARS:
+        return msgs
+
+    original_len = len(msgs.connection_note)
+    try:
+        shorter = _shorten_note(msgs.connection_note, api_key)
+    except Exception as exc:  # noqa: BLE001 -- a failed rewrite falls back to QA flagging
+        print(f"  {role}: note was {original_len} chars; shortening failed ({exc}), leaving for QA")
+        return msgs
+
+    if len(shorter) > CONNECTION_NOTE_MAX_CHARS:
+        print(f"  {role}: note was {original_len} chars; rewrite still {len(shorter)}, leaving for QA")
+        return msgs
+
+    print(f"  {role}: note shortened {original_len} -> {len(shorter)} chars")
+    return DraftedMessages(connection_note=shorter, follow_up_message=msgs.follow_up_message)
 
 
 def draft_company_messages(
@@ -117,9 +162,13 @@ def draft_company_messages(
     )
 
     return {
-        role: DraftedMessages(
-            connection_note=msg["connection_note"],
-            follow_up_message=msg["follow_up_message"],
+        role: _enforce_length(
+            role,
+            DraftedMessages(
+                connection_note=msg["connection_note"],
+                follow_up_message=msg["follow_up_message"],
+            ),
+            api_key,
         )
         for role, msg in data.items()
         if role in contact_facts
