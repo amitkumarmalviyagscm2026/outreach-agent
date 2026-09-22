@@ -20,26 +20,35 @@ import time
 from src.config import Secrets, clamp_company_count
 from src.crustdata_client import Contact, CrustdataClient
 from src.discovery import Company, rank_companies
-from src.drafting import draft_messages
+from src.drafting import DraftedMessages, draft_company_messages
 from src.qa import validate_contact_messages
 from src.workbook import OutputRow, build_output_path, write_workbook
 
 
-def _draft_or_flag(user_sector: str, company: Company, contact: Contact, api_key: str) -> tuple[str | None, str | None, str]:
-    """Drafts messages for one contact, returns (note, followup, qa_flag).
-    Returns empty messages with a flag rather than raising, so one bad
-    Gemini call doesn't stop the whole run."""
+def _draft_company(
+    user_sector: str, company: Company, contacts: list[Contact], api_key: str
+) -> tuple[dict[str, DraftedMessages], str]:
+    """One Gemini call for all of a company's contacts. Returns
+    ({role: messages}, error_flag). Never raises -- a failed call becomes
+    a QA flag on the row rather than stopping the run."""
+    try:
+        return draft_company_messages(user_sector, company, contacts, api_key), ""
+    except Exception as exc:  # noqa: BLE001 -- deliberately broad: never let one company kill the run
+        return {}, f"drafting failed: {exc}"
+
+
+def _messages_and_flag(contact: Contact, drafted: dict[str, DraftedMessages]) -> tuple[str | None, str | None, str]:
+    """Pulls one contact's messages out of the per-company result and runs
+    the QA gate on them. Returns (note, followup, qa_flag)."""
     if not contact.name:
         return None, None, "no contact found"
+    msgs = drafted.get(contact.role)
+    if msgs is None:
+        return None, None, ""  # the company-level drafting flag already explains why
 
-    try:
-        drafted = draft_messages(user_sector, company, contact, api_key)
-    except Exception as exc:  # noqa: BLE001 -- deliberately broad: never let one contact kill the run
-        return None, None, f"drafting failed: {exc}"
-
-    qa = validate_contact_messages(drafted.connection_note, drafted.follow_up_message, contact.linkedin_url)
-    flag = "; ".join(qa.flags) if not qa.ok else ""
-    return drafted.connection_note, drafted.follow_up_message, flag
+    qa = validate_contact_messages(msgs.connection_note, msgs.follow_up_message, contact.linkedin_url)
+    flag = f"{contact.role}: " + "; ".join(qa.flags) if not qa.ok else ""
+    return msgs.connection_note, msgs.follow_up_message, flag
 
 
 def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets) -> str:
@@ -66,19 +75,25 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
 
     try:
         for i, company in enumerate(companies, start=1):
-            print(f"[{i}/{len(companies)}] {company.name}")
+            print(f"[{i}/{len(companies)}] {company.name} (searching as '{company.search_name}')")
             row_flags: list[str] = []
 
             try:
-                hr_contact, ops_contact = crustdata.get_two_contacts(company.name)
+                hr_contact, ops_contact = crustdata.get_two_contacts(company.search_name)
             except Exception as exc:  # noqa: BLE001 -- one company's failure must not stop the run
                 print(f"  contact research failed: {exc}")
                 hr_contact = Contact(role="hr_ta")
                 ops_contact = Contact(role="ops_scm")
                 row_flags.append(f"contact research failed: {exc}")
 
-            hr_note, hr_followup, hr_flag = _draft_or_flag(sector, company, hr_contact, secrets.gemini_api_key)
-            ops_note, ops_followup, ops_flag = _draft_or_flag(sector, company, ops_contact, secrets.gemini_api_key)
+            drafted, draft_flag = _draft_company(
+                sector, company, [hr_contact, ops_contact], secrets.gemini_api_key
+            )
+            if draft_flag:
+                row_flags.append(draft_flag)
+
+            hr_note, hr_followup, hr_flag = _messages_and_flag(hr_contact, drafted)
+            ops_note, ops_followup, ops_flag = _messages_and_flag(ops_contact, drafted)
 
             for f in (hr_flag, ops_flag):
                 if f:

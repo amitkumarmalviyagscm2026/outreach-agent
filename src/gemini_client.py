@@ -119,8 +119,16 @@ def _call_one_model(
                 return json.loads(text), None
 
             except (KeyError, IndexError, json.JSONDecodeError) as exc:
+                # 200 OK but unusable body -- truncated JSON (output token
+                # cap hit), or no candidate text (e.g. a safety block).
+                # These used to retry silently, leaving gaps in the log.
                 last_error = exc
-                time.sleep(BACKOFF_BASE_SECONDS * (2 ** attempt))
+                wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
+                print(
+                    f"  Gemini [{model}] unusable response ({type(exc).__name__}: {exc}), "
+                    f"retrying in {wait:.0f}s (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                )
+                time.sleep(wait)
             except httpx.HTTPStatusError as exc:
                 # A non-retryable status (e.g. 400 bad request, 401/403
                 # auth) -- no point trying this model again, or another
@@ -129,7 +137,12 @@ def _call_one_model(
                 return None, RuntimeError(f"Gemini [{model}] call failed (non-retryable): {exc}")
             except httpx.HTTPError as exc:
                 last_error = exc
-                time.sleep(BACKOFF_BASE_SECONDS * (2 ** attempt))
+                wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
+                print(
+                    f"  Gemini [{model}] network error ({type(exc).__name__}), "
+                    f"retrying in {wait:.0f}s (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                )
+                time.sleep(wait)
 
     return None, last_error
 

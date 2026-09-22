@@ -150,7 +150,7 @@ python run.py --sector "Pharma" --count 1 --mode test
 |---|---|---|
 | 1. Discover | `src/discovery.py` | One Gemini call: sector → ranked top-N company names (JSON, not free text) |
 | 2. Research | `src/crustdata_client.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword in one query each |
-| 3. Draft | `src/drafting.py` | One Gemini call per contact: a ≤300-char connection note + follow-up, using only facts actually returned by Crustdata |
+| 3. Draft | `src/drafting.py` | One Gemini call per company, covering both contacts: a ≤300-char connection note + follow-up each, using only facts actually returned by Crustdata |
 | 4. Validate | `src/qa.py` | Length, combined-salutation, placeholder, malformed-link, and orphan-message checks; failures get a `QA_FLAG`, never silently dropped |
 | 5. Write | `src/workbook.py` | `.xlsx` with real clickable LinkedIn hyperlinks (not bare URLs), frozen header row |
 
