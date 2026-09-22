@@ -44,6 +44,9 @@ jobs:
         env:
           CRUSTDATA_API_KEY: ${{ secrets.CRUSTDATA_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Optional backup LLM -- if this secret isn't set, the pipeline
+          # runs on Gemini alone.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GITHUB_ACTIONS: "true"
           # Python buffers stdout when it isn't a real terminal, which is
           # always true on an Actions runner -- without this, every print()

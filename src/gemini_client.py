@@ -81,8 +81,9 @@ def _call_one_model(
     model: str,
     body: dict,
     api_key: str,
+    retries: int,
 ) -> tuple[dict | None, Exception | None]:
-    """Tries a single model, up to RETRIES_PER_MODEL times. Returns
+    """Tries a single model, up to `retries` times. Returns
     (result, None) on success or (None, last_error) on exhaustion --
     never raises, so the caller can cleanly fall through to the next
     model in the list."""
@@ -90,7 +91,7 @@ def _call_one_model(
     last_error: Exception | None = None
 
     with httpx.Client(timeout=60.0) as client:
-        for attempt in range(RETRIES_PER_MODEL):
+        for attempt in range(retries):
             try:
                 resp = client.post(url, json=body)
 
@@ -105,7 +106,7 @@ def _call_one_model(
                     source = "server-suggested" if server_delay is not None else "guessed"
                     print(
                         f"  Gemini [{model}] {resp.status_code} ({resp.reason_phrase}), "
-                        f"backing off {wait:.0f}s [{source}] (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                        f"backing off {wait:.0f}s [{source}] (attempt {attempt + 1}/{retries})"
                     )
                     last_error = httpx.HTTPStatusError(
                         f"{resp.status_code} {resp.reason_phrase}", request=resp.request, response=resp
@@ -126,7 +127,7 @@ def _call_one_model(
                 wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
                 print(
                     f"  Gemini [{model}] unusable response ({type(exc).__name__}: {exc}), "
-                    f"retrying in {wait:.0f}s (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                    f"retrying in {wait:.0f}s (attempt {attempt + 1}/{retries})"
                 )
                 time.sleep(wait)
             except httpx.HTTPStatusError as exc:
@@ -140,7 +141,7 @@ def _call_one_model(
                 wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
                 print(
                     f"  Gemini [{model}] network error ({type(exc).__name__}), "
-                    f"retrying in {wait:.0f}s (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                    f"retrying in {wait:.0f}s (attempt {attempt + 1}/{retries})"
                 )
                 time.sleep(wait)
 
@@ -154,6 +155,7 @@ def generate_json(
     api_key: str,
     system_instruction: str | None = None,
     max_output_tokens: int = 4096,
+    retries: int = RETRIES_PER_MODEL,
 ) -> dict:
     """Calls Gemini with the response forced into `schema`, trying each
     model in `models` in order until one succeeds. Paces successful calls
@@ -171,7 +173,7 @@ def generate_json(
 
     last_error: Exception | None = None
     for model in models:
-        result, error = _call_one_model(model, body, api_key)
+        result, error = _call_one_model(model, body, api_key, retries)
         if result is not None:
             time.sleep(PACING_SECONDS_AFTER_SUCCESS)
             return result

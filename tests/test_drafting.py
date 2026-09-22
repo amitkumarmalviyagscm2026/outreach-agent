@@ -14,7 +14,7 @@ HR = Contact(role="hr_ta", name="Priya Sharma", title="HR Head")
 def _fake_generate(responses):
     calls = []
 
-    def fake(models, prompt, schema, api_key, **kwargs):
+    def fake(keys, prompt, schema, **kwargs):
         calls.append(prompt)
         return responses[len(calls) - 1]
 
@@ -57,7 +57,7 @@ def test_failed_rewrite_keeps_original_for_qa(monkeypatch):
     responses = [{"hr_ta": {"connection_note": LONG, "follow_up_message": "Thanks!"}}]
     calls = []
 
-    def fake(models, prompt, schema, api_key, **kwargs):
+    def fake(keys, prompt, schema, **kwargs):
         calls.append(prompt)
         if len(calls) == 1:
             return responses[0]

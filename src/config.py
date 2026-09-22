@@ -63,6 +63,7 @@ GEMINI_MODELS = ["gemini-flash-lite-latest"]
 class Secrets:
     crustdata_api_key: str
     gemini_api_key: str
+    groq_api_key: str | None = None
 
 
 def load_secrets() -> Secrets:
@@ -87,7 +88,15 @@ def load_secrets() -> Secrets:
         )
         sys.exit(1)
 
-    return Secrets(crustdata_api_key=crustdata_key, gemini_api_key=gemini_key)
+    # Optional: the backup LLM (see src/llm.py). Without it, the pipeline
+    # runs on Gemini alone, exactly as before.
+    groq_key = os.environ.get("GROQ_API_KEY", "").strip() or None
+    if groq_key:
+        print("Backup LLM: Groq configured -- will take over if Gemini is unavailable")
+    else:
+        print("Backup LLM: none (set GROQ_API_KEY to enable Groq fallback)")
+
+    return Secrets(crustdata_api_key=crustdata_key, gemini_api_key=gemini_key, groq_api_key=groq_key)
 
 
 def clamp_company_count(requested: int, mode: str) -> int:

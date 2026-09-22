@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.config import CONNECTION_NOTE_MAX_CHARS, GEMINI_MODELS
+from src.config import CONNECTION_NOTE_MAX_CHARS
 from src.crustdata_client import Contact
 from src.discovery import Company
-from src.gemini_client import generate_json
+from src.llm import LLMKeys, generate_json
 
 _MESSAGE_SCHEMA = {
     "type": "OBJECT",
@@ -82,7 +82,7 @@ class DraftedMessages:
     follow_up_message: str
 
 
-def _shorten_note(note: str, api_key: str) -> str:
+def _shorten_note(note: str, keys: LLMKeys) -> str:
     """One extra Gemini call to bring an over-limit note under the cap.
     Only runs when a note is actually too long, so it costs nothing on
     the common path."""
@@ -92,11 +92,11 @@ def _shorten_note(note: str, api_key: str) -> str:
         "facts or claims. It must remain complete sentences -- rewrite, don't "
         f"just cut it off.\n\nNote:\n{note}"
     )
-    data = generate_json(GEMINI_MODELS, prompt, _SHORTEN_SCHEMA, api_key)
+    data = generate_json(keys, prompt, _SHORTEN_SCHEMA)
     return data["connection_note"]
 
 
-def _enforce_length(role: str, msgs: DraftedMessages, api_key: str) -> DraftedMessages:
+def _enforce_length(role: str, msgs: DraftedMessages, keys: LLMKeys) -> DraftedMessages:
     """If a note is over the hard limit, try one rewrite. If the rewrite
     fails or is still too long, keep the original -- the QA gate will flag
     it for a human rather than this code silently truncating mid-sentence."""
@@ -105,7 +105,7 @@ def _enforce_length(role: str, msgs: DraftedMessages, api_key: str) -> DraftedMe
 
     original_len = len(msgs.connection_note)
     try:
-        shorter = _shorten_note(msgs.connection_note, api_key)
+        shorter = _shorten_note(msgs.connection_note, keys)
     except Exception as exc:  # noqa: BLE001 -- a failed rewrite falls back to QA flagging
         print(f"  {role}: note was {original_len} chars; shortening failed ({exc}), leaving for QA")
         return msgs
@@ -122,7 +122,7 @@ def draft_company_messages(
     user_sector: str,
     company: Company,
     contacts: list[Contact],
-    api_key: str,
+    keys: LLMKeys,
 ) -> dict[str, DraftedMessages]:
     """Drafts messages for every contact in `contacts` that has a name, in
     one Gemini call. Returns {role: DraftedMessages}. Contacts with no name
@@ -154,10 +154,9 @@ def draft_company_messages(
     )
 
     data = generate_json(
-        GEMINI_MODELS,
+        keys,
         prompt,
         schema,
-        api_key,
         system_instruction=SYSTEM_PROMPT,
     )
 
@@ -168,7 +167,7 @@ def draft_company_messages(
                 connection_note=msg["connection_note"],
                 follow_up_message=msg["follow_up_message"],
             ),
-            api_key,
+            keys,
         )
         for role, msg in data.items()
         if role in contact_facts

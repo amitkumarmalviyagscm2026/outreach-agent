@@ -100,6 +100,23 @@ actually *call* -- see above):
    limited rather than a spend-based trial, so it doesn't run out the way
    a paid API's trial credit does.
 
+   **Optional but recommended:** add `GROQ_API_KEY` as a third secret — a
+   free key from [console.groq.com/keys](https://console.groq.com/keys), no
+   credit card. Groq is a separate service used as a backup LLM: when
+   Gemini's free tier is overloaded (sustained 503s, which happened on
+   several real runs), calls hand off to Groq instead of failing. Without
+   it, the pipeline runs on Gemini alone.
+
+   How the fallback behaves (`src/llm.py`):
+   - Gemini is always tried first.
+   - With Groq configured, Gemini gets 3 retries instead of 5, so a failing
+     call hands off in ~40 seconds rather than ~3 minutes.
+   - Once Gemini fails completely, it's skipped for 5 minutes and calls go
+     straight to Groq, so an outage doesn't cost a full retry cycle per call.
+   - The end of each run's log shows how many calls each provider handled.
+   - Groq free tier: 30 requests/minute, 1,000/day, 8K tokens/minute per
+     model (`openai/gpt-oss-120b`, then `openai/gpt-oss-20b`).
+
 2. Local dev (optional but recommended before pushing):
    ```powershell
    python -m venv .venv
@@ -148,9 +165,9 @@ python run.py --sector "Pharma" --count 1 --mode test
 
 | Stage | File | What it does |
 |---|---|---|
-| 1. Discover | `src/discovery.py` | One Gemini call: sector → ranked top-N company names (JSON, not free text) |
+| 1. Discover | `src/discovery.py` | One LLM call (Gemini, Groq as backup): sector → ranked top-N company names (JSON, not free text) |
 | 2. Research | `src/crustdata_client.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword in one query each |
-| 3. Draft | `src/drafting.py` | One Gemini call per company, covering both contacts: a ≤300-char connection note + follow-up each, using only facts actually returned by Crustdata |
+| 3. Draft | `src/drafting.py` | One LLM call per company, covering both contacts: a ≤300-char connection note + follow-up each, using only facts actually returned by Crustdata |
 | 4. Validate | `src/qa.py` | Length, combined-salutation, placeholder, malformed-link, and orphan-message checks; failures get a `QA_FLAG`, never silently dropped |
 | 5. Write | `src/workbook.py` | `.xlsx` with real clickable LinkedIn hyperlinks (not bare URLs), frozen header row |
 

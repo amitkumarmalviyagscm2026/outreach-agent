@@ -21,18 +21,20 @@ from src.config import Secrets, clamp_company_count
 from src.crustdata_client import CANDIDATES_PER_SEARCH, CREDITS_PER_RESULT, Contact, CrustdataClient
 from src.discovery import Company, rank_companies
 from src.drafting import DraftedMessages, draft_company_messages
+from src import llm
+from src.llm import LLMKeys
 from src.qa import validate_contact_messages
 from src.workbook import OutputRow, build_output_path, write_workbook
 
 
 def _draft_company(
-    user_sector: str, company: Company, contacts: list[Contact], api_key: str
+    user_sector: str, company: Company, contacts: list[Contact], keys: LLMKeys
 ) -> tuple[dict[str, DraftedMessages], str]:
     """One Gemini call for all of a company's contacts. Returns
     ({role: messages}, error_flag). Never raises -- a failed call becomes
     a QA flag on the row rather than stopping the run."""
     try:
-        return draft_company_messages(user_sector, company, contacts, api_key), ""
+        return draft_company_messages(user_sector, company, contacts, keys), ""
     except Exception as exc:  # noqa: BLE001 -- deliberately broad: never let one company kill the run
         return {}, f"drafting failed: {exc}"
 
@@ -58,7 +60,8 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
     output_path = build_output_path(sector, mode)
     print(f"Checkpointing to: {output_path} (saved after every company)")
 
-    companies = rank_companies(sector, count, secrets.gemini_api_key)
+    keys = LLMKeys(gemini=secrets.gemini_api_key, groq=secrets.groq_api_key)
+    companies = rank_companies(sector, count, keys)
     print(f"Discovery returned {len(companies)} companies")
 
     projected_requests = len(companies) * 2  # 2 person/search calls per company (HR/TA, Ops/SCM)
@@ -88,7 +91,7 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
                 row_flags.append(f"contact research failed: {exc}")
 
             drafted, draft_flag = _draft_company(
-                sector, company, [hr_contact, ops_contact], secrets.gemini_api_key
+                sector, company, [hr_contact, ops_contact], keys
             )
             if draft_flag:
                 row_flags.append(draft_flag)
@@ -134,6 +137,7 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
         crustdata.close()
 
     print(crustdata.counter.summary())
+    print(llm.stats.summary())
     print(f"QA summary: {qa_flagged}/{len(rows)} rows flagged for review")
     print(f"Workbook written: {output_path}")
     return output_path

@@ -16,8 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.config import GEMINI_MODELS
-from src.gemini_client import generate_json
+from src.llm import LLMKeys, generate_json
 
 COMPANY_LIST_SCHEMA = {
     "type": "OBJECT",
@@ -66,7 +65,7 @@ class Company:
     rationale: str
 
 
-def rank_companies(sector: str, count: int, api_key: str) -> list[Company]:
+def rank_companies(sector: str, count: int, keys: LLMKeys) -> list[Company]:
     """Asks Gemini for exactly `count` companies in `sector`, ranked by
     relevance as a campus-hiring / business-development target."""
     prompt = (
@@ -79,10 +78,9 @@ def rank_companies(sector: str, count: int, api_key: str) -> list[Company]:
     )
 
     data = generate_json(
-        GEMINI_MODELS,
+        keys,
         prompt,
         COMPANY_LIST_SCHEMA,
-        api_key,
         max_output_tokens=_DISCOVERY_MAX_OUTPUT_TOKENS,
     )
     raw = data.get("companies", [])
