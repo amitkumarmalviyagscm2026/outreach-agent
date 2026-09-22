@@ -38,6 +38,13 @@ MAX_RETRIES = 6
 BACKOFF_BASE_SECONDS = 4.0
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# A real run showed only the first ~2 back-to-back calls succeeding before
+# every subsequent one hit 429/503 and stayed there through all 6 retries --
+# a free-tier per-minute rate limit, not transient overload. Pacing every
+# successful call by this much keeps us under that limit proactively
+# instead of only reacting to it after the fact.
+PACING_SECONDS_AFTER_SUCCESS = 6.0
+
 
 def generate_json(
     model: str,
@@ -85,7 +92,9 @@ def generate_json(
                 resp.raise_for_status()
                 data = resp.json()
                 text = data["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(text)
+                result = json.loads(text)
+                time.sleep(PACING_SECONDS_AFTER_SUCCESS)
+                return result
 
             except (KeyError, IndexError, json.JSONDecodeError) as exc:
                 # Malformed/unexpected response shape -- still worth a
