@@ -39,8 +39,12 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
     companies = rank_companies(sector, count, secrets.gemini_api_key)
     print(f"Discovery returned {len(companies)} companies")
 
-    projected_db_calls = len(companies) * 3  # 1 company lookup + 2 person searches, min
-    print(f"Projected minimum Crustdata calls: {projected_db_calls} (db tier; live fallback adds more on misses)")
+    projected_requests = len(companies) * 2  # 2 person/search calls per company (HR/TA, Ops/SCM)
+    projected_credits = projected_requests * 1 * 0.03  # worst case: every call returns its 1 allowed result
+    print(
+        f"Projected Crustdata requests: {projected_requests} "
+        f"(up to ~{projected_credits:.2f} credits, since person/search bills per result returned)"
+    )
 
     crustdata = CrustdataClient(secrets.crustdata_api_key)
     rows: list[OutputRow] = []

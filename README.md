@@ -10,20 +10,23 @@ This is a standalone rebuild of an interactive Claude-Code outreach
 workflow, so it can run unattended from GitHub Actions instead of needing
 a live chat session.
 
-## ⚠️ Before your first REAL run
+## How contact research works
 
-Crustdata's docs are behind a login, so `src/crustdata_client.py` was
-written from public fragments only (confirmed: `Authorization: Bearer
-<key>` + `x-api-version` header, and a `/company/search` endpoint). Every
-line marked `# TODO confirm` is a best-effort placeholder for a path,
-param name, or response field this repo could not verify without your
-account. **Log into https://app.crustdata.com/api/docs and fix those
-before trusting output against your real Crustdata balance.**
+`src/crustdata_client.py` is written directly against Crustdata's
+documented Person Search API (`POST /person/search`), confirmed from their
+docs rather than guessed. It filters people in one call by their current
+employer's name and a title keyword, so there's no separate "look up the
+company, get an ID, then search people" step. Person Search bills **0.03
+credits per result returned, not per request** — a search that matches
+nobody costs nothing, and with `limit=1` per call, a full 100-company run
+costs at most `100 × 2 × 0.03 = 6` credits for contact research.
 
-The fastest way to find what's wrong: run `--count 1 --mode test`, and
-temporarily add a `print(data)` right after the first `self._post(...)`
-call in `crustdata_client.py` to see the real response shape, then fix the
-field names it's reading.
+If Crustdata changes their schema after this was written, the place to
+look is the `fields`/response paths at the top of `crustdata_client.py`
+(`basic_profile.name`, `experience.employment_details.current.title`,
+`social_handles.professional_network_identifier.profile_url`) — run
+`--count 1 --mode test` and print the raw response if a field comes back
+empty unexpectedly.
 
 ## Setup
 
@@ -90,7 +93,7 @@ python run.py --sector "Pharma" --count 1 --mode test
 | Stage | File | What it does |
 |---|---|---|
 | 1. Discover | `src/discovery.py` | One Gemini call: sector → ranked top-N company names (JSON, not free text) |
-| 2. Research | `src/crustdata_client.py` | Per company: resolve the company, then 2 Crustdata person searches (HR/TA, Ops/SCM) — cheap DB tier first, live tier only on a miss |
+| 2. Research | `src/crustdata_client.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword in one query each |
 | 3. Draft | `src/drafting.py` | One Gemini call per contact: a ≤300-char connection note + follow-up, using only facts actually returned by Crustdata |
 | 4. Validate | `src/qa.py` | Length, combined-salutation, placeholder, malformed-link, and orphan-message checks; failures get a `QA_FLAG`, never silently dropped |
 | 5. Write | `src/workbook.py` | `.xlsx` with real clickable LinkedIn hyperlinks (not bare URLs), frozen header row |
@@ -104,10 +107,10 @@ up as a `QA_FLAG` on that row instead.
 - `run_mode: test` clamps to 10 companies at both the workflow layer and
   inside `run.py` independently (`src/config.clamp_company_count`), so it
   holds even if you call `run.py` directly.
-- The job log prints a projected minimum Crustdata call count before the
-  research loop starts, and an actual db/live call count plus a QA summary
-  at the end — check these in the Actions run log to track spend over
-  time.
+- The job log prints a projected Crustdata request/credit estimate before
+  the research loop starts, and an actual request/result/credit count plus
+  a QA summary at the end — check these in the Actions run log to track
+  spend over time.
 - Contact scope is fixed at exactly 2 roles per company (HR/TA, Ops/SCM),
   not the full CEO/COO/CHRO/Plant-Head/Campus-Recruiter list, specifically
   to keep per-run cost predictable.
