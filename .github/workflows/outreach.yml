@@ -1,0 +1,50 @@
+name: Outreach Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      sector:
+        description: "Target sector (e.g. Pharma, FMCG, EdTech)"
+        required: true
+        type: string
+      company_count:
+        description: "Number of companies (max 100; test mode caps at 10 regardless)"
+        required: true
+        default: "10"
+        type: string
+      run_mode:
+        description: "test = capped at 10 companies (cheap, always run this first), full = up to company_count"
+        required: true
+        type: choice
+        options:
+          - test
+          - full
+        default: test
+
+jobs:
+  outreach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run outreach pipeline
+        env:
+          CRUSTDATA_API_KEY: ${{ secrets.CRUSTDATA_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_ACTIONS: "true"
+        run: |
+          python run.py --sector "${{ inputs.sector }}" --count "${{ inputs.company_count }}" --mode "${{ inputs.run_mode }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: outreach-${{ inputs.sector }}-${{ inputs.run_mode }}-${{ github.run_id }}
+          path: output/*.xlsx
+          retention-days: 14
