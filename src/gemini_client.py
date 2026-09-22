@@ -16,30 +16,61 @@ Confirmed from Google's public docs (ai.google.dev/gemini-api):
   - Response: candidates[0].content.parts[0].text holds the JSON string
 
 Real runs showed BOTH "gemini-flash-latest" and "gemini-flash-lite-latest"
-hitting sustained 429/503 at different times -- this looks like genuine,
-unpredictable free-tier capacity pressure on Google's side, not a single
-wrong model choice. Rather than gamble on one model name, generate_json()
-takes an ORDERED LIST of model names (GEMINI_MODELS in config.py) and
-tries each in turn, with a smaller retry budget per model, so whichever
-one is actually healthy right now gets used automatically.
+hitting sustained 429/503 -- checked against this project's actual Gemini
+API Usage dashboard (AI Studio), which showed 429 "Too Many Requests" as
+the single largest error category. That confirms a genuine per-minute rate
+limit on a brand-new free-tier project, not random cross-model instability.
+generate_json() therefore does two things beyond a naive retry loop:
+
+  1. Reads Google's own recommended wait time from a 429 response body
+     (google.rpc.RetryInfo.retryDelay, e.g. "13s") and obeys THAT instead
+     of a guessed exponential backoff -- a blind guess can under-wait and
+     make the next retry count as yet another request against the same
+     tight window, digging the hole deeper instead of clearing it.
+  2. Tries each model in GEMINI_MODELS (config.py) in turn, since a
+     per-project quota can still leave headroom on a model that hasn't
+     been hit as hard yet.
 """
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import httpx
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 RETRIES_PER_MODEL = 3
-BACKOFF_BASE_SECONDS = 4.0
+BACKOFF_BASE_SECONDS = 6.0
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
-# A real run showed only the first ~2 back-to-back calls succeeding before
-# every subsequent one hit 429/503 and stayed there. Pacing every
-# successful call by this much keeps us under a per-minute rate limit
-# proactively instead of only reacting to it after the fact.
-PACING_SECONDS_AFTER_SUCCESS = 6.0
+# Real usage data (AI Studio's Gemini API Usage dashboard) showed 429 "Too
+# Many Requests" as the dominant error even at a 6s/10-per-minute pace --
+# that left zero margin for retries, which themselves count against the
+# same limit. 12s (~5/minute) leaves real headroom.
+PACING_SECONDS_AFTER_SUCCESS = 12.0
+
+_RETRY_DELAY_PATTERN = re.compile(r"^(\d+(?:\.\d+)?)s$")
+
+
+def _parse_retry_delay(resp: httpx.Response) -> float | None:
+    """Reads Google's own suggested wait time from a 429/503 error body,
+    if present: error.details[] contains a RetryInfo entry with a
+    retryDelay like "13s". Returns None if the body isn't JSON or doesn't
+    carry this field -- callers fall back to exponential backoff."""
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        return None
+
+    details = (data.get("error") or {}).get("details") or []
+    for detail in details:
+        delay = detail.get("retryDelay")
+        if isinstance(delay, str):
+            match = _RETRY_DELAY_PATTERN.match(delay)
+            if match:
+                return float(match.group(1))
+    return None
 
 
 def _call_one_model(
@@ -60,10 +91,17 @@ def _call_one_model(
                 resp = client.post(url, json=body)
 
                 if resp.status_code in RETRYABLE_STATUS_CODES:
-                    wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
+                    server_delay = _parse_retry_delay(resp)
+                    guessed_delay = BACKOFF_BASE_SECONDS * (2 ** attempt)
+                    # Obey Google's own number when it gives one -- it
+                    # reflects the actual remaining quota window, which a
+                    # guess can't know. Add a 2s buffer since the window
+                    # boundary itself is approximate.
+                    wait = (server_delay + 2.0) if server_delay is not None else guessed_delay
+                    source = "server-suggested" if server_delay is not None else "guessed"
                     print(
                         f"  Gemini [{model}] {resp.status_code} ({resp.reason_phrase}), "
-                        f"backing off {wait:.0f}s (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                        f"backing off {wait:.0f}s [{source}] (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
                     )
                     last_error = httpx.HTTPStatusError(
                         f"{resp.status_code} {resp.reason_phrase}", request=resp.request, response=resp
