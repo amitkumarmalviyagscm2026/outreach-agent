@@ -1,8 +1,10 @@
 """Shared Google Gemini REST client for structured JSON generation.
 
-Used by discovery.py (sector -> company list) and drafting.py (per-contact
-messages). Calls the REST API directly with httpx rather than depending on
-a wrapper SDK, so there's one fewer package version to keep in sync.
+Used by discovery.py (sector -> company list) -- the only LLM call left in
+the pipeline; drafting.py builds messages from fixed templates instead
+(see templates.py). Calls the REST API directly with httpx rather than
+depending on a wrapper SDK, so there's one fewer package version to keep
+in sync.
 
 Chosen over the Anthropic API specifically because it has a genuinely free
 tier: a key from https://aistudio.google.com/apikey needs no credit card,

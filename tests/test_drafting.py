@@ -1,68 +1,34 @@
-"""Over-length connection notes get one rewrite; if that fails or is still
-too long, the original is kept for the QA gate to flag -- never silently
-truncated mid-sentence."""
-from src import drafting
-from src.config import CONNECTION_NOTE_MAX_CHARS
+"""drafting.py now builds messages from fixed templates (templates.py),
+not an LLM call -- these tests exercise that wiring end to end."""
 from src.crustdata_client import Contact
 from src.discovery import Company
+from src.drafting import draft_company_messages
 
-LONG = "x" * (CONNECTION_NOTE_MAX_CHARS + 40)
 COMPANY = Company(name="Cipla Limited", search_name="Cipla", rationale="large pharma")
-HR = Contact(role="hr_ta", name="Priya Sharma", title="HR Head")
 
 
-def _fake_generate(responses):
-    calls = []
+def test_drafts_only_contacts_that_have_a_name():
+    hr = Contact(role="hr_ta", name="Priya Sharma", title="HR Head",
+                 linkedin_url="https://www.linkedin.com/in/priya")
+    ops = Contact(role="ops_scm")  # no match found
 
-    def fake(keys, prompt, schema, **kwargs):
-        calls.append(prompt)
-        return responses[len(calls) - 1]
+    out = draft_company_messages("Pharma", COMPANY, [hr, ops])
 
-    return fake, calls
-
-
-def test_short_note_is_not_rewritten(monkeypatch):
-    fake, calls = _fake_generate([
-        {"hr_ta": {"connection_note": "Hi Priya, keen to connect.", "follow_up_message": "Thanks!"}},
-    ])
-    monkeypatch.setattr(drafting, "generate_json", fake)
-    out = drafting.draft_company_messages("Pharma", COMPANY, [HR], "key")
-    assert out["hr_ta"].connection_note == "Hi Priya, keen to connect."
-    assert len(calls) == 1  # no extra shortening call
+    assert set(out.keys()) == {"hr_ta"}
+    assert "Priya" in out["hr_ta"].connection_note
+    assert "Cipla" in out["hr_ta"].follow_up_message
 
 
-def test_long_note_is_shortened(monkeypatch):
-    fake, calls = _fake_generate([
-        {"hr_ta": {"connection_note": LONG, "follow_up_message": "Thanks!"}},
-        {"connection_note": "Hi Priya, shorter now."},
-    ])
-    monkeypatch.setattr(drafting, "generate_json", fake)
-    out = drafting.draft_company_messages("Pharma", COMPANY, [HR], "key")
-    assert out["hr_ta"].connection_note == "Hi Priya, shorter now."
-    assert out["hr_ta"].follow_up_message == "Thanks!"
-    assert len(calls) == 2
+def test_no_contacts_returns_empty():
+    assert draft_company_messages("Pharma", COMPANY, [Contact(role="hr_ta"), Contact(role="ops_scm")]) == {}
 
 
-def test_rewrite_still_too_long_keeps_original_for_qa(monkeypatch):
-    fake, _ = _fake_generate([
-        {"hr_ta": {"connection_note": LONG, "follow_up_message": "Thanks!"}},
-        {"connection_note": LONG + "y"},
-    ])
-    monkeypatch.setattr(drafting, "generate_json", fake)
-    out = drafting.draft_company_messages("Pharma", COMPANY, [HR], "key")
-    assert out["hr_ta"].connection_note == LONG
+def test_hr_ta_and_ops_scm_get_different_wording():
+    hr = Contact(role="hr_ta", name="Priya Sharma", title="HR Head")
+    ops = Contact(role="ops_scm", name="Ravi Kumar", title="Plant Head")
 
+    out = draft_company_messages("Pharma", COMPANY, [hr, ops])
 
-def test_failed_rewrite_keeps_original_for_qa(monkeypatch):
-    responses = [{"hr_ta": {"connection_note": LONG, "follow_up_message": "Thanks!"}}]
-    calls = []
-
-    def fake(keys, prompt, schema, **kwargs):
-        calls.append(prompt)
-        if len(calls) == 1:
-            return responses[0]
-        raise RuntimeError("Gemini call failed on all models: 503")
-
-    monkeypatch.setattr(drafting, "generate_json", fake)
-    out = drafting.draft_company_messages("Pharma", COMPANY, [HR], "key")
-    assert out["hr_ta"].connection_note == LONG
+    assert out["hr_ta"].connection_note != out["ops_scm"].connection_note
+    assert "Supply Chain" in out["ops_scm"].connection_note
+    assert "Placement Committee" in out["hr_ta"].connection_note

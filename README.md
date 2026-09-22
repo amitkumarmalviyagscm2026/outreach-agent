@@ -3,8 +3,10 @@
 Pick a sector, click "Run workflow" on GitHub, get back an Excel file of
 top companies in that sector with two contacts per company (HR/Talent
 Acquisition, and a senior Ops/Supply-Chain contact), each with a
-personalized LinkedIn connection note (≤300 characters) and a
-post-acceptance follow-up message.
+connection note (≤300 characters) and a post-acceptance follow-up message,
+built from a fixed template carrying real facts about the sender's own
+program (batch size, rankings, placement numbers) -- personalized only by
+the contact's name, honorific, title, and company.
 
 This is a standalone rebuild of an interactive Claude-Code outreach
 workflow, so it can run unattended from GitHub Actions instead of needing
@@ -177,15 +179,47 @@ python run.py --sector "Pharma" --count 1 --mode test
 
 | Stage | File | What it does |
 |---|---|---|
-| 1. Discover | `src/discovery.py` | One LLM call (Gemini, Groq as backup): sector → ranked top-N company names (JSON, not free text) |
+| 1. Discover | `src/discovery.py` | One LLM call (Gemini, Groq as backup) **for the whole run**: sector → ranked top-N company names (JSON, not free text) |
 | 2. Research | `src/crustdata_client.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword in one query each |
-| 3. Draft | `src/drafting.py` | One LLM call per company, covering both contacts: a ≤300-char connection note + follow-up each, using only facts actually returned by Crustdata |
+| 3. Draft | `src/drafting.py` + `src/templates.py` | **No LLM call.** A fixed template per role, filled in with the contact's name, honorific, title, and company — see below |
 | 4. Validate | `src/qa.py` | Length, combined-salutation, placeholder, malformed-link, and orphan-message checks; failures get a `QA_FLAG`, never silently dropped |
 | 5. Write | `src/workbook.py` | `.xlsx` with real clickable LinkedIn hyperlinks (not bare URLs), frozen header row |
 
 `src/pipeline.py` wires these together with per-company error isolation —
 one failed lookup or draft doesn't take down a 100-company run; it shows
 up as a `QA_FLAG` on that row instead.
+
+## Message content: fixed templates, not LLM-composed
+
+The connection note and follow-up are built by `src/templates.py`, not
+written by an LLM. The follow-up asserts real, specific facts about the
+sender's own program — batch size, national/global ranking, recruiter
+names, average and highest placement package — and those numbers have to
+be exact every time. An LLM asked to "personalize" a message risks
+paraphrasing "24.89 LPA" into something close but wrong, with no way to
+catch it downstream. A fixed template can't drift.
+
+**To update the facts** (a new batch, new ranking, new placement numbers),
+edit the constants at the top of `src/templates.py` — `BATCH_SIZE`,
+`NIRF_RANK`, `AVG_PACKAGE_LPA`, etc. Nothing else needs to change.
+
+**Personalization is limited to four things**, read from Crustdata: the
+contact's name, an honorific inferred from their first name (a curated
+list of common Indian names in `templates.py`; an unrecognized name gets
+no honorific rather than a guessed one), their title (dropped from the
+sentence if it's unusually long, to guarantee the message stays under its
+character limit), and the company name. HR/TA and Ops/SCM contacts get
+differently worded messages, framed around their actual function.
+
+**Length is guaranteed, not requested.** `tests/test_templates.py` checks
+both templates against a deliberately long name + title + company and
+confirms they still fit under 300 / 800 characters — this is enforced by
+the template logic itself (dropping the honorific, then the title clause,
+before ever truncating a sentence), not by asking an LLM to hit a budget.
+
+One effect of this: **Gemini/Groq are now only called once per run** (for
+the company list in step 1), not once per company. The Groq fallback
+section above still applies to that one call, just far less often.
 
 ## Cost control
 

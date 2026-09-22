@@ -43,7 +43,7 @@ def test_pipeline_one_draft_call_per_company(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(pipeline, "CrustdataClient", FakeCrustdata)
 
-    def fake_draft(sector, company, contacts, key):
+    def fake_draft(sector, company, contacts):
         from src.drafting import DraftedMessages
         found = [c for c in contacts if c.name]
         draft_calls.append([c.role for c in found])

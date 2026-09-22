@@ -1,7 +1,9 @@
 """LLM routing: Gemini first, Groq as a backup when Gemini is unavailable.
 
-Every LLM call in the pipeline (discovery, drafting, note shortening) goes
-through generate_json() here, not to a provider directly.
+The only LLM call left in the pipeline -- discovery.py's company list --
+goes through generate_json() here, not to a provider directly. Drafting
+no longer uses an LLM at all (see src/templates.py), so this now runs
+once per pipeline run instead of once per company.
 
 Why a second provider: Gemini's free tier returned sustained 503s across
 several real runs -- server-side overload that no retry tuning fixes.

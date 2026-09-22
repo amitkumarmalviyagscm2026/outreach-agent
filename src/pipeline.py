@@ -28,13 +28,14 @@ from src.workbook import OutputRow, build_output_path, write_workbook
 
 
 def _draft_company(
-    user_sector: str, company: Company, contacts: list[Contact], keys: LLMKeys
+    user_sector: str, company: Company, contacts: list[Contact]
 ) -> tuple[dict[str, DraftedMessages], str]:
-    """One Gemini call for all of a company's contacts. Returns
-    ({role: messages}, error_flag). Never raises -- a failed call becomes
-    a QA flag on the row rather than stopping the run."""
+    """Builds messages for all of a company's contacts from the fixed
+    templates (see templates.py -- no LLM call). Returns
+    ({role: messages}, error_flag). Never raises -- an unexpected failure
+    becomes a QA flag on the row rather than stopping the run."""
     try:
-        return draft_company_messages(user_sector, company, contacts, keys), ""
+        return draft_company_messages(user_sector, company, contacts), ""
     except Exception as exc:  # noqa: BLE001 -- deliberately broad: never let one company kill the run
         return {}, f"drafting failed: {exc}"
 
@@ -90,9 +91,7 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
                 ops_contact = Contact(role="ops_scm")
                 row_flags.append(f"contact research failed: {exc}")
 
-            drafted, draft_flag = _draft_company(
-                sector, company, [hr_contact, ops_contact], keys
-            )
+            drafted, draft_flag = _draft_company(sector, company, [hr_contact, ops_contact])
             if draft_flag:
                 row_flags.append(draft_flag)
 
