@@ -33,11 +33,13 @@ field names it's reading.
    git init
    gh repo create outreach-agent --private --source=. --remote=origin
    gh secret set CRUSTDATA_API_KEY
-   gh secret set ANTHROPIC_API_KEY
+   gh secret set GEMINI_API_KEY
    ```
-   `ANTHROPIC_API_KEY` is a Claude **API** key from
-   [console.anthropic.com](https://console.anthropic.com) — separate
-   billing from a Claude.ai / Claude Code subscription.
+   `GEMINI_API_KEY` is a **free** Google AI Studio key from
+   [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — sign
+   in with a Google account, no credit card needed. It's rate/quota
+   limited rather than a spend-based trial, so it doesn't run out the way
+   a paid API's trial credit does.
 
 2. Local dev (optional but recommended before pushing):
    ```powershell
@@ -51,8 +53,9 @@ field names it's reading.
 
 **Always run `test` mode first.** It's hard-capped at 10 companies
 regardless of what you type into "Number of companies" — this is your
-safety net against burning Crustdata credits or Anthropic spend on a
-mistake.
+safety net against burning Crustdata credits (Gemini's free tier has no
+spend to burn, but it does have a per-minute rate limit worth not hammering
+blind) on a mistake.
 
 Via GitHub CLI:
 ```powershell
@@ -86,9 +89,9 @@ python run.py --sector "Pharma" --count 1 --mode test
 
 | Stage | File | What it does |
 |---|---|---|
-| 1. Discover | `src/discovery.py` | One Anthropic call: sector → ranked top-N company names (JSON, not free text) |
+| 1. Discover | `src/discovery.py` | One Gemini call: sector → ranked top-N company names (JSON, not free text) |
 | 2. Research | `src/crustdata_client.py` | Per company: resolve the company, then 2 Crustdata person searches (HR/TA, Ops/SCM) — cheap DB tier first, live tier only on a miss |
-| 3. Draft | `src/drafting.py` | One Anthropic call per contact: a ≤300-char connection note + follow-up, using only facts actually returned by Crustdata |
+| 3. Draft | `src/drafting.py` | One Gemini call per contact: a ≤300-char connection note + follow-up, using only facts actually returned by Crustdata |
 | 4. Validate | `src/qa.py` | Length, combined-salutation, placeholder, malformed-link, and orphan-message checks; failures get a `QA_FLAG`, never silently dropped |
 | 5. Write | `src/workbook.py` | `.xlsx` with real clickable LinkedIn hyperlinks (not bare URLs), frozen header row |
 

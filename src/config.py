@@ -1,10 +1,14 @@
 """Secrets and run configuration.
 
-Loads CRUSTDATA_API_KEY / ANTHROPIC_API_KEY from the environment. In GitHub
+Loads CRUSTDATA_API_KEY / GEMINI_API_KEY from the environment. In GitHub
 Actions these arrive as real env vars from repo Secrets. For local runs,
 loads a .env file (gitignored) if present. Never logs a key's value -- only
 whether it is present, so a misconfigured run fails loudly without leaking
 anything into the job log.
+
+GEMINI_API_KEY is a Google AI Studio key (https://aistudio.google.com/apikey)
+-- genuinely free, no credit card required, used instead of a paid LLM API
+so this pipeline costs nothing to run on the drafting/discovery side.
 """
 from __future__ import annotations
 
@@ -31,13 +35,16 @@ ROLES = (ROLE_HR_TA, ROLE_OPS_SCM)
 TEST_MODE_MAX_COMPANIES = 10
 FULL_MODE_MAX_COMPANIES = 100
 
-ANTHROPIC_MODEL = "claude-sonnet-5"
+# Free-tier Flash model. Confirm this is still current at
+# https://ai.google.dev/gemini-api/docs/models before a real run --
+# Google periodically renames/retires Flash generations.
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 @dataclass(frozen=True)
 class Secrets:
     crustdata_api_key: str
-    anthropic_api_key: str
+    gemini_api_key: str
 
 
 def load_secrets() -> Secrets:
@@ -45,13 +52,13 @@ def load_secrets() -> Secrets:
     secret-free error message if either is missing -- fail fast rather than
     let the pipeline half-run and burn calls before hitting an auth error."""
     crustdata_key = os.environ.get("CRUSTDATA_API_KEY", "").strip()
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
 
     missing = []
     if not crustdata_key:
         missing.append("CRUSTDATA_API_KEY")
-    if not anthropic_key:
-        missing.append("ANTHROPIC_API_KEY")
+    if not gemini_key:
+        missing.append("GEMINI_API_KEY")
 
     if missing:
         print(
@@ -62,7 +69,7 @@ def load_secrets() -> Secrets:
         )
         sys.exit(1)
 
-    return Secrets(crustdata_api_key=crustdata_key, anthropic_api_key=anthropic_key)
+    return Secrets(crustdata_api_key=crustdata_key, gemini_api_key=gemini_key)
 
 
 def clamp_company_count(requested: int, mode: str) -> int:

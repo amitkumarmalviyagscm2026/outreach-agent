@@ -38,7 +38,7 @@ jobs:
       - name: Run outreach pipeline
         env:
           CRUSTDATA_API_KEY: ${{ secrets.CRUSTDATA_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_ACTIONS: "true"
         run: |
           python run.py --sector "${{ inputs.sector }}" --count "${{ inputs.company_count }}" --mode "${{ inputs.run_mode }}"

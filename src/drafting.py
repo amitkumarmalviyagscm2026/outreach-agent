@@ -1,4 +1,4 @@
-"""Per-contact message drafting via Anthropic: connection note + follow-up.
+"""Per-contact message drafting via Gemini: connection note + follow-up.
 
 Hard rule: only reference facts present in the Contact/Company objects
 passed in. If a field (e.g. title) is missing, write around it -- never
@@ -10,34 +10,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import anthropic
-
-from src.config import ANTHROPIC_MODEL, CONNECTION_NOTE_MAX_CHARS
+from src.config import CONNECTION_NOTE_MAX_CHARS, GEMINI_MODEL
 from src.crustdata_client import Contact
 from src.discovery import Company
+from src.gemini_client import generate_json
 
-DRAFT_TOOL = {
-    "name": "return_messages",
-    "description": "Return the drafted connection note and follow-up message.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "connection_note": {
-                "type": "string",
-                "description": f"LinkedIn connection request note. Hard limit {CONNECTION_NOTE_MAX_CHARS} characters.",
-            },
-            "follow_up_message": {
-                "type": "string",
-                "description": "Message to send after the connection request is accepted.",
-            },
-            "facts_used": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "List of specific facts from the input this note actually references (e.g. 'title', 'company_name'). Used for a downstream fact-check.",
-            },
+DRAFT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "connection_note": {
+            "type": "STRING",
+            "description": f"LinkedIn connection request note. Hard limit {CONNECTION_NOTE_MAX_CHARS} characters.",
         },
-        "required": ["connection_note", "follow_up_message", "facts_used"],
+        "follow_up_message": {
+            "type": "STRING",
+            "description": "Message to send after the connection request is accepted.",
+        },
+        "facts_used": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+            "description": "List of specific facts from the input this note actually references (e.g. 'title', 'company_name'). Used for a downstream fact-check.",
+        },
     },
+    "required": ["connection_note", "follow_up_message", "facts_used"],
 }
 
 SYSTEM_PROMPT = f"""You draft LinkedIn outreach messages for a business-development \
@@ -66,6 +61,8 @@ the honorific entirely rather than guessing.
 may appear in the output -- every field must be the final text.
 6. The follow-up message is sent after the connection is accepted -- it can \
 be slightly longer, but stay professional and specific, not generic.
+7. Return ONLY the JSON object matching the given schema -- no markdown \
+fences, no commentary outside the fields.
 """
 
 
@@ -83,8 +80,6 @@ def draft_messages(
     api_key: str,
     alumni_note: str | None = None,
 ) -> DraftedMessages:
-    client = anthropic.Anthropic(api_key=api_key)
-
     facts = {
         "user_sector": user_sector,
         "target_company_name": company.name,
@@ -96,30 +91,21 @@ def draft_messages(
     }
     known_facts = {k: v for k, v in facts.items() if v}
 
-    message = client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        tools=[DRAFT_TOOL],
-        tool_choice={"type": "tool", "name": "return_messages"},
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "Draft the connection note and follow-up for this contact. "
-                    f"Known facts (use ONLY these, nothing else): {known_facts}"
-                ),
-            }
-        ],
+    prompt = (
+        "Draft the connection note and follow-up for this contact. "
+        f"Known facts (use ONLY these, nothing else): {known_facts}"
     )
 
-    for block in message.content:
-        if block.type == "tool_use" and block.name == "return_messages":
-            inp = block.input
-            return DraftedMessages(
-                connection_note=inp["connection_note"],
-                follow_up_message=inp["follow_up_message"],
-                facts_used=inp.get("facts_used", []),
-            )
+    data = generate_json(
+        GEMINI_MODEL,
+        prompt,
+        DRAFT_SCHEMA,
+        api_key,
+        system_instruction=SYSTEM_PROMPT,
+    )
 
-    raise RuntimeError("drafting: model did not return structured messages")
+    return DraftedMessages(
+        connection_note=data["connection_note"],
+        follow_up_message=data["follow_up_message"],
+        facts_used=data.get("facts_used", []),
+    )

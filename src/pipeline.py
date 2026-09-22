@@ -18,7 +18,7 @@ from src.workbook import OutputRow, write_workbook
 def _draft_or_flag(user_sector: str, company: Company, contact: Contact, api_key: str) -> tuple[str | None, str | None, str]:
     """Drafts messages for one contact, returns (note, followup, qa_flag).
     Returns empty messages with a flag rather than raising, so one bad
-    Anthropic call doesn't stop the whole run."""
+    Gemini call doesn't stop the whole run."""
     if not contact.name:
         return None, None, "no contact found"
 
@@ -36,7 +36,7 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
     count = clamp_company_count(requested_count, mode)
     print(f"Mode={mode}, requested={requested_count}, using count={count}")
 
-    companies = rank_companies(sector, count, secrets.anthropic_api_key)
+    companies = rank_companies(sector, count, secrets.gemini_api_key)
     print(f"Discovery returned {len(companies)} companies")
 
     projected_db_calls = len(companies) * 3  # 1 company lookup + 2 person searches, min
@@ -59,8 +59,8 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
                 ops_contact = Contact(role="ops_scm")
                 row_flags.append(f"contact research failed: {exc}")
 
-            hr_note, hr_followup, hr_flag = _draft_or_flag(sector, company, hr_contact, secrets.anthropic_api_key)
-            ops_note, ops_followup, ops_flag = _draft_or_flag(sector, company, ops_contact, secrets.anthropic_api_key)
+            hr_note, hr_followup, hr_flag = _draft_or_flag(sector, company, hr_contact, secrets.gemini_api_key)
+            ops_note, ops_followup, ops_flag = _draft_or_flag(sector, company, ops_contact, secrets.gemini_api_key)
 
             for f in (hr_flag, ops_flag):
                 if f:
