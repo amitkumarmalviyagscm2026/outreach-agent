@@ -30,10 +30,9 @@ empty unexpectedly.
 
 ## Troubleshooting: Gemini won't respond
 
-Two distinct problems showed up during setup, both worth knowing about if
-`GEMINI_MODELS` in `src/config.py` (currently
-`["gemini-flash-lite-latest", "gemini-flash-latest"]`) ever needs another
-model added or reordered:
+Three distinct problems showed up during setup. `GEMINI_MODELS` in
+`src/config.py` is currently `["gemini-flash-lite-latest"]` (Gemini 3.5
+Flash Lite) -- here's why, and what to check if it ever needs to change:
 
 **A pinned model name 404s even though it's listed as available.**
 `GET /v1beta/models` can list a model (e.g. `gemini-2.5-flash`) as
@@ -42,15 +41,29 @@ account/key -- a known, unresolved Gemini quirk. Always use a `-latest`
 alias (`gemini-flash-latest`, `gemini-flash-lite-latest`), never a pinned
 dotted version; aliases route to whatever's actually live for your key.
 
-**A single model can hit sustained 429/503 even so.** Real runs showed
-BOTH `gemini-flash-latest` and `gemini-flash-lite-latest` fail with
-persistent rate-limit/overload errors at different times -- free-tier
-capacity pressure that moves around, not one bad model. That's why
-`generate_json()` in `gemini_client.py` takes an ordered **list** of
-models and tries each in turn (3 retries per model) rather than betting
-everything on one name. If every model in the list is ever unavailable at
-once, test a specific model name directly to find one that currently
-works, then add it to `GEMINI_MODELS`:
+**Different models have wildly different free-tier daily quotas --
+check before relying on one.** AI Studio's own **Rate Limit** dashboard
+(a tab next to the Usage dashboard, or console.cloud.google.com's Gemini
+API "Quotas" page) showed the full, non-Lite alias
+(`gemini-flash-latest` -> Gemini 3.8 Flash) capped at just **5 requests/
+minute and 20 requests/DAY** on this project's free tier -- a single test
+burst exceeded it (29/20), and it then fails on every call until the next
+daily reset, no matter how well retries are tuned. `gemini-flash-lite-latest`
+(-> Gemini 3.5 Flash Lite) has a far larger budget -- 15 RPM / 500 RPD --
+comfortably enough for a 100-company run (~200 Gemini calls). **Before
+adding any model to `GEMINI_MODELS`, check its RPM/RPD on that dashboard
+first** -- a model that's "available" can still be useless if its daily
+cap is smaller than one full run needs.
+
+**A model within its quota can still hit transient 429/503.**
+`generate_json()` in `gemini_client.py` retries with real exponential
+backoff, and reads Google's own suggested wait time from the 429 response
+body (`retryDelay`) when present, obeying that instead of guessing. It
+also accepts an ordered **list** of models and falls through to the next
+one on exhaustion -- currently a list of one, since Flash Lite alone
+covers this pipeline's volume, but the fallback logic is there if a
+second well-suited model is ever added. To find what your key can
+currently call:
 
 ```powershell
 $body = @{ contents = @(@{ parts = @(@{ text = "Say hello in one word." }) }) } | ConvertTo-Json -Depth 5
