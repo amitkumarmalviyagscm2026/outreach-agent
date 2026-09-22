@@ -40,7 +40,11 @@ import time
 import httpx
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-RETRIES_PER_MODEL = 3
+# GEMINI_MODELS (config.py) is now a single model with confirmed daily
+# quota headroom (see config.py's comment) -- its failures are genuine
+# transient overload, not quota exhaustion, so it's worth more patience
+# per model now that there's no second model to fall through to.
+RETRIES_PER_MODEL = 5
 BACKOFF_BASE_SECONDS = 6.0
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 

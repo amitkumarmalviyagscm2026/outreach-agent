@@ -40,15 +40,23 @@ FULL_MODE_MAX_COMPANIES = 100
 #   - "gemini-2.5-flash" (pinned): listed as available by GET /v1beta/models
 #     but 404'd on generateContent -- a known, unresolved Google-side quirk.
 #     Lesson: use a "-latest" alias, never a pinned dotted version.
-#   - A single model, whichever one, was not enough: real runs showed BOTH
-#     "gemini-flash-latest" and "gemini-flash-lite-latest" hitting sustained
-#     429/503 at different times -- free-tier capacity pressure that moves
-#     around, not a single bad model choice. Trying both in order, with a
-#     real retry budget on each, is more robust than betting on one.
-# If both are ever unavailable, use the PowerShell snippet in README.md's
-# troubleshooting section to find what your key can actually call, and add
-# it to this list.
-GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"]
+#   - "gemini-flash-latest" (-> Gemini 3.8 Flash) was tried as a fallback
+#     alongside Lite, but AI Studio's own Rate Limit dashboard confirmed its
+#     free-tier cap is just 5 RPM / 20 RPD -- 20 requests a DAY, total. A
+#     single test burst exceeded that (29/20 used) and it then fails on
+#     every call until the next daily reset, no matter how well retries are
+#     tuned. Useless as a fallback for a pipeline that needs 200+ calls per
+#     full run, so it's been removed rather than kept as dead weight.
+#   - "gemini-flash-lite-latest" (-> Gemini 3.5 Flash Lite) has a much
+#     larger free-tier budget: 15 RPM / 500 RPD, confirmed from the same
+#     dashboard with plenty of headroom left after all this session's
+#     testing (95/500 RPD used). This is the one model actually sized for
+#     this pipeline's volume.
+# If Lite's own limits are ever hit, use the PowerShell snippet in
+# README.md's troubleshooting section to find another working model name,
+# and check its own RPM/RPD on the AI Studio Rate Limit dashboard before
+# adding it here -- don't repeat the mistake above.
+GEMINI_MODELS = ["gemini-flash-lite-latest"]
 
 
 @dataclass(frozen=True)
