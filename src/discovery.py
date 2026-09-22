@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.config import GEMINI_MODEL
+from src.config import GEMINI_MODELS
 from src.gemini_client import generate_json
 
 COMPANY_LIST_SCHEMA = {
@@ -56,7 +56,7 @@ def rank_companies(sector: str, count: int, api_key: str) -> list[Company]:
         f"{count} companies, no more, no fewer."
     )
 
-    data = generate_json(GEMINI_MODEL, prompt, COMPANY_LIST_SCHEMA, api_key)
+    data = generate_json(GEMINI_MODELS, prompt, COMPANY_LIST_SCHEMA, api_key)
     raw = data.get("companies", [])
     companies = [Company(name=c["name"], rationale=c["rationale"]) for c in raw]
 

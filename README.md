@@ -31,22 +31,26 @@ empty unexpectedly.
 ## Troubleshooting: Gemini won't respond
 
 Two distinct problems showed up during setup, both worth knowing about if
-`GEMINI_MODEL` in `src/config.py` (currently `gemini-flash-lite-latest`)
-ever needs to change again:
+`GEMINI_MODELS` in `src/config.py` (currently
+`["gemini-flash-lite-latest", "gemini-flash-latest"]`) ever needs another
+model added or reordered:
 
 **A pinned model name 404s even though it's listed as available.**
 `GET /v1beta/models` can list a model (e.g. `gemini-2.5-flash`) as
 supporting `generateContent`, but actually calling it 404s anyway for that
-account/key -- a known, unresolved Gemini quirk. Prefer a `-latest` alias
-(`gemini-flash-latest`, `gemini-flash-lite-latest`) over a pinned dotted
-version; aliases route to whatever's actually live for your key.
+account/key -- a known, unresolved Gemini quirk. Always use a `-latest`
+alias (`gemini-flash-latest`, `gemini-flash-lite-latest`), never a pinned
+dotted version; aliases route to whatever's actually live for your key.
 
-**An alias itself returns sustained 429/503.** `gemini-flash-latest`
-(the full, non-Lite alias) hit persistent rate-limit/overload errors on
-this project's free tier, while `gemini-flash-lite-latest` worked --
-the Lite tier appears to draw from a separate, less congested capacity
-pool. If whatever `GEMINI_MODEL` is set to starts failing, test a specific
-model name directly before changing the config:
+**A single model can hit sustained 429/503 even so.** Real runs showed
+BOTH `gemini-flash-latest` and `gemini-flash-lite-latest` fail with
+persistent rate-limit/overload errors at different times -- free-tier
+capacity pressure that moves around, not one bad model. That's why
+`generate_json()` in `gemini_client.py` takes an ordered **list** of
+models and tries each in turn (3 retries per model) rather than betting
+everything on one name. If every model in the list is ever unavailable at
+once, test a specific model name directly to find one that currently
+works, then add it to `GEMINI_MODELS`:
 
 ```powershell
 $body = @{ contents = @(@{ parts = @(@{ text = "Say hello in one word." }) }) } | ConvertTo-Json -Depth 5

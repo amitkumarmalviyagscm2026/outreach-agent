@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.config import CONNECTION_NOTE_MAX_CHARS, GEMINI_MODEL
+from src.config import CONNECTION_NOTE_MAX_CHARS, GEMINI_MODELS
 from src.crustdata_client import Contact
 from src.discovery import Company
 from src.gemini_client import generate_json
@@ -97,7 +97,7 @@ def draft_messages(
     )
 
     data = generate_json(
-        GEMINI_MODEL,
+        GEMINI_MODELS,
         prompt,
         DRAFT_SCHEMA,
         api_key,

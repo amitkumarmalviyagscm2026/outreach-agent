@@ -15,16 +15,13 @@ Confirmed from Google's public docs (ai.google.dev/gemini-api):
     "type" values are uppercase (STRING, OBJECT, ARRAY, NUMBER, INTEGER, BOOLEAN)
   - Response: candidates[0].content.parts[0].text holds the JSON string
 
-GEMINI_MODEL in config.py is an alias ("gemini-flash-latest"), not a pinned
-version -- see the README's Gemini-404 troubleshooting section if that
-alias ever stops resolving.
-
-A first real run also surfaced 503 "Service Unavailable" from Gemini's
-free tier under load -- retried here with real exponential backoff (the
-original version used a flat delay, which wasn't enough to let a transient
-503 clear). 429 (rate limit) and 500/502/503/504 (server-side, transient)
-are retried; anything else (e.g. 400 for a malformed request) fails fast
-since retrying it would just waste attempts on a non-transient error.
+Real runs showed BOTH "gemini-flash-latest" and "gemini-flash-lite-latest"
+hitting sustained 429/503 at different times -- this looks like genuine,
+unpredictable free-tier capacity pressure on Google's side, not a single
+wrong model choice. Rather than gamble on one model name, generate_json()
+takes an ORDERED LIST of model names (GEMINI_MODELS in config.py) and
+tries each in turn, with a smaller retry budget per model, so whichever
+one is actually healthy right now gets used automatically.
 """
 from __future__ import annotations
 
@@ -34,32 +31,78 @@ import time
 import httpx
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-MAX_RETRIES = 6
+RETRIES_PER_MODEL = 3
 BACKOFF_BASE_SECONDS = 4.0
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # A real run showed only the first ~2 back-to-back calls succeeding before
-# every subsequent one hit 429/503 and stayed there through all 6 retries --
-# a free-tier per-minute rate limit, not transient overload. Pacing every
-# successful call by this much keeps us under that limit proactively
-# instead of only reacting to it after the fact.
+# every subsequent one hit 429/503 and stayed there. Pacing every
+# successful call by this much keeps us under a per-minute rate limit
+# proactively instead of only reacting to it after the fact.
 PACING_SECONDS_AFTER_SUCCESS = 6.0
 
 
-def generate_json(
+def _call_one_model(
     model: str,
+    body: dict,
+    api_key: str,
+) -> tuple[dict | None, Exception | None]:
+    """Tries a single model, up to RETRIES_PER_MODEL times. Returns
+    (result, None) on success or (None, last_error) on exhaustion --
+    never raises, so the caller can cleanly fall through to the next
+    model in the list."""
+    url = f"{BASE_URL}/models/{model}:generateContent?key={api_key}"
+    last_error: Exception | None = None
+
+    with httpx.Client(timeout=60.0) as client:
+        for attempt in range(RETRIES_PER_MODEL):
+            try:
+                resp = client.post(url, json=body)
+
+                if resp.status_code in RETRYABLE_STATUS_CODES:
+                    wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
+                    print(
+                        f"  Gemini [{model}] {resp.status_code} ({resp.reason_phrase}), "
+                        f"backing off {wait:.0f}s (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                    )
+                    last_error = httpx.HTTPStatusError(
+                        f"{resp.status_code} {resp.reason_phrase}", request=resp.request, response=resp
+                    )
+                    time.sleep(wait)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                return json.loads(text), None
+
+            except (KeyError, IndexError, json.JSONDecodeError) as exc:
+                last_error = exc
+                time.sleep(BACKOFF_BASE_SECONDS * (2 ** attempt))
+            except httpx.HTTPStatusError as exc:
+                # A non-retryable status (e.g. 400 bad request, 401/403
+                # auth) -- no point trying this model again, or another
+                # model either, since it's a request/auth problem, not a
+                # capacity one. Surface it immediately.
+                return None, RuntimeError(f"Gemini [{model}] call failed (non-retryable): {exc}")
+            except httpx.HTTPError as exc:
+                last_error = exc
+                time.sleep(BACKOFF_BASE_SECONDS * (2 ** attempt))
+
+    return None, last_error
+
+
+def generate_json(
+    models: list[str],
     prompt: str,
     schema: dict,
     api_key: str,
     system_instruction: str | None = None,
     max_output_tokens: int = 4096,
 ) -> dict:
-    """Calls Gemini with the response forced into `schema`. Retries with
-    exponential backoff on rate-limit (429) and transient server errors
-    (500/502/503/504) -- both are expected fairly often on the free tier
-    under load, not signs of a broken request."""
-    url = f"{BASE_URL}/models/{model}:generateContent?key={api_key}"
-
+    """Calls Gemini with the response forced into `schema`, trying each
+    model in `models` in order until one succeeds. Paces successful calls
+    to stay under the free tier's per-minute limit."""
     body: dict = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -72,44 +115,16 @@ def generate_json(
         body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
     last_error: Exception | None = None
-    with httpx.Client(timeout=60.0) as client:
-        for attempt in range(MAX_RETRIES):
-            try:
-                resp = client.post(url, json=body)
+    for model in models:
+        result, error = _call_one_model(model, body, api_key)
+        if result is not None:
+            time.sleep(PACING_SECONDS_AFTER_SUCCESS)
+            return result
+        last_error = error
+        if isinstance(error, RuntimeError):
+            # Non-retryable (bad request/auth) -- no point trying the next
+            # model either, it would fail the same way.
+            raise error
+        print(f"  Model '{model}' exhausted its retries, trying next model if any remain")
 
-                if resp.status_code in RETRYABLE_STATUS_CODES:
-                    wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
-                    print(
-                        f"  Gemini {resp.status_code} ({resp.reason_phrase}), "
-                        f"backing off {wait:.0f}s (attempt {attempt + 1}/{MAX_RETRIES})"
-                    )
-                    last_error = httpx.HTTPStatusError(
-                        f"{resp.status_code} {resp.reason_phrase}", request=resp.request, response=resp
-                    )
-                    time.sleep(wait)
-                    continue
-
-                resp.raise_for_status()
-                data = resp.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                result = json.loads(text)
-                time.sleep(PACING_SECONDS_AFTER_SUCCESS)
-                return result
-
-            except (KeyError, IndexError, json.JSONDecodeError) as exc:
-                # Malformed/unexpected response shape -- still worth a
-                # retry (transient truncation, etc.) but not a network error.
-                last_error = exc
-                wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
-                time.sleep(wait)
-            except httpx.HTTPStatusError as exc:
-                # A non-retryable status (e.g. 400 bad request, 401/403
-                # auth) -- fail fast rather than burn through attempts.
-                raise RuntimeError(f"Gemini call failed (non-retryable): {exc}") from exc
-            except httpx.HTTPError as exc:
-                # Network-level failure (timeout, connection reset) -- retry.
-                last_error = exc
-                wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
-                time.sleep(wait)
-
-    raise RuntimeError(f"Gemini call failed after {MAX_RETRIES} attempts: {last_error}")
+    raise RuntimeError(f"Gemini call failed on all models {models}: {last_error}")

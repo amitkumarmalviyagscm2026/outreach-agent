@@ -35,18 +35,20 @@ ROLES = (ROLE_HR_TA, ROLE_OPS_SCM)
 TEST_MODE_MAX_COMPANIES = 10
 FULL_MODE_MAX_COMPANIES = 100
 
-# Free-tier Flash-Lite model, via Google's own rolling alias. History:
+# Free-tier models, tried in order until one responds (see gemini_client.py).
+# History:
 #   - "gemini-2.5-flash" (pinned): listed as available by GET /v1beta/models
 #     but 404'd on generateContent -- a known, unresolved Google-side quirk.
-#   - "gemini-flash-latest" (alias): resolved fine, but real runs hit
-#     sustained 429/503 -- the full Flash alias appears to route to a
-#     heavily-loaded model under free-tier traffic.
-#   - "gemini-flash-lite-latest" (alias, current): confirmed working via a
-#     direct test call, currently resolving to gemini-3.5-flash-lite. The
-#     Lite tier draws from a separate, less congested capacity pool.
-# If this one also starts failing, use the PowerShell snippet in README.md's
-# troubleshooting section to find what your key can actually call right now.
-GEMINI_MODEL = "gemini-flash-lite-latest"
+#     Lesson: use a "-latest" alias, never a pinned dotted version.
+#   - A single model, whichever one, was not enough: real runs showed BOTH
+#     "gemini-flash-latest" and "gemini-flash-lite-latest" hitting sustained
+#     429/503 at different times -- free-tier capacity pressure that moves
+#     around, not a single bad model choice. Trying both in order, with a
+#     real retry budget on each, is more robust than betting on one.
+# If both are ever unavailable, use the PowerShell snippet in README.md's
+# troubleshooting section to find what your key can actually call, and add
+# it to this list.
+GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"]
 
 
 @dataclass(frozen=True)
