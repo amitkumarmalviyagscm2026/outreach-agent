@@ -10,6 +10,18 @@ This is a standalone rebuild of an interactive Claude-Code outreach
 workflow, so it can run unattended from GitHub Actions instead of needing
 a live chat session.
 
+## ⚠️ Run this from a private repository
+
+Every run produces personal data about real people -- names, job titles,
+LinkedIn URLs, and messages drafted to them. On a **public** repository,
+GitHub Actions run logs are visible to anyone and uploaded artifacts (the
+output Excel file) can be downloaded by any signed-in GitHub user. So:
+
+- To use this, **copy the code into a private repository** of your own
+  and add your API keys as secrets there. Don't run it on a public repo.
+- This repository is a public copy of the code only. It has no secrets
+  configured and isn't used for runs.
+
 ## How contact research works
 
 `src/crustdata_client.py` is written directly against Crustdata's
