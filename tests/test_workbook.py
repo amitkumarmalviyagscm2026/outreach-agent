@@ -3,7 +3,7 @@ import tempfile
 
 from openpyxl import load_workbook
 
-from src.workbook import HEADERS, OutputRow, write_workbook
+from src.workbook import HEADERS, OutputRow, build_output_path, write_workbook
 
 
 def _sample_row(**overrides) -> OutputRow:
@@ -25,11 +25,23 @@ def _sample_row(**overrides) -> OutputRow:
     return OutputRow(**base)
 
 
+def test_build_output_path_test_mode_tagged():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = build_output_path("Pharma", "test", output_dir=tmp)
+        assert "_TEST_" in os.path.basename(path)
+
+
+def test_build_output_path_full_mode_untagged():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = build_output_path("Pharma", "full", output_dir=tmp)
+        assert "_TEST" not in os.path.basename(path)
+
+
 def test_writes_headers_and_row():
     with tempfile.TemporaryDirectory() as tmp:
-        path = write_workbook([_sample_row()], sector="Pharma", mode="test", output_dir=tmp)
+        path = os.path.join(tmp, "out.xlsx")
+        write_workbook([_sample_row()], path)
         assert os.path.exists(path)
-        assert "_TEST_" in os.path.basename(path)
 
         wb = load_workbook(path)
         ws = wb.active
@@ -40,7 +52,8 @@ def test_writes_headers_and_row():
 
 def test_linkedin_cell_is_real_hyperlink_not_bare_text():
     with tempfile.TemporaryDirectory() as tmp:
-        path = write_workbook([_sample_row()], sector="Pharma", mode="test", output_dir=tmp)
+        path = os.path.join(tmp, "out.xlsx")
+        write_workbook([_sample_row()], path)
         wb = load_workbook(path)
         ws = wb.active
         # HR/TA LinkedIn column is column 4
@@ -51,7 +64,8 @@ def test_linkedin_cell_is_real_hyperlink_not_bare_text():
 
 def test_missing_contact_leaves_cells_blank_not_broken_link():
     with tempfile.TemporaryDirectory() as tmp:
-        path = write_workbook([_sample_row()], sector="Pharma", mode="test", output_dir=tmp)
+        path = os.path.join(tmp, "out.xlsx")
+        write_workbook([_sample_row()], path)
         wb = load_workbook(path)
         ws = wb.active
         # Ops/SCM name column is column 7 -- no ops contact in this fixture
@@ -62,7 +76,16 @@ def test_missing_contact_leaves_cells_blank_not_broken_link():
         assert cell.value in (None, "")
 
 
-def test_full_mode_filename_has_no_test_suffix():
+def test_repeated_write_overwrites_same_path_as_checkpoint():
+    """The pipeline calls write_workbook repeatedly against the same path
+    as a checkpoint after every company -- confirm a second, longer call
+    replaces the first rather than appending or erroring."""
     with tempfile.TemporaryDirectory() as tmp:
-        path = write_workbook([_sample_row()], sector="Pharma", mode="full", output_dir=tmp)
-        assert "_TEST" not in os.path.basename(path)
+        path = os.path.join(tmp, "out.xlsx")
+        write_workbook([_sample_row()], path)
+        write_workbook([_sample_row(), _sample_row(company="Sun Pharma")], path)
+
+        wb = load_workbook(path)
+        ws = wb.active
+        assert ws.max_row == 3  # header + 2 data rows, not 1 + 1 + 2
+        assert ws.cell(row=3, column=1).value == "Sun Pharma"

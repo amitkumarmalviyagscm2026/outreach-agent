@@ -54,7 +54,14 @@ jobs:
           python run.py --sector "${{ inputs.sector }}" --count "${{ inputs.company_count }}" --mode "${{ inputs.run_mode }}"
 
       - uses: actions/upload-artifact@v4
+        # Runs even if the pipeline step above failed, was cancelled, or
+        # hit the job timeout -- the workbook is checkpointed to disk after
+        # every company (see pipeline.py), so a partial run still has a
+        # real file worth uploading instead of losing it all to whatever
+        # killed the job.
+        if: always()
         with:
           name: outreach-${{ inputs.sector }}-${{ inputs.run_mode }}-${{ github.run_id }}
           path: output/*.xlsx
           retention-days: 14
+          if-no-files-found: warn

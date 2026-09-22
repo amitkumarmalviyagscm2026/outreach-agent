@@ -4,15 +4,25 @@ A failure researching or drafting for one company must not kill a run of
 up to 100 -- each company is wrapped so the loop always reaches the end
 and writes whatever it has, with failures visible via QA_FLAG rather than
 a crashed job and zero output.
+
+The workbook is checkpointed to disk after EVERY company, not just once at
+the end -- a real 100-company run showed sustained Gemini 503s can push
+total runtime past a job timeout, and a single end-of-run write means a
+kill at company 90/100 loses all 90 companies' worth of paid-for API
+calls, not just the unfinished ones. The checkpoint write is cheap (a few
+KB, sub-second), so paying that cost on every iteration is worth the
+guarantee.
 """
 from __future__ import annotations
+
+import time
 
 from src.config import Secrets, clamp_company_count
 from src.crustdata_client import Contact, CrustdataClient
 from src.discovery import Company, rank_companies
 from src.drafting import draft_messages
 from src.qa import validate_contact_messages
-from src.workbook import OutputRow, write_workbook
+from src.workbook import OutputRow, build_output_path, write_workbook
 
 
 def _draft_or_flag(user_sector: str, company: Company, contact: Contact, api_key: str) -> tuple[str | None, str | None, str]:
@@ -36,6 +46,9 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
     count = clamp_company_count(requested_count, mode)
     print(f"Mode={mode}, requested={requested_count}, using count={count}")
 
+    output_path = build_output_path(sector, mode)
+    print(f"Checkpointing to: {output_path} (saved after every company)")
+
     companies = rank_companies(sector, count, secrets.gemini_api_key)
     print(f"Discovery returned {len(companies)} companies")
 
@@ -49,6 +62,7 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
     crustdata = CrustdataClient(secrets.crustdata_api_key)
     rows: list[OutputRow] = []
     qa_flagged = 0
+    start_time = time.monotonic()
 
     try:
         for i, company in enumerate(companies, start=1):
@@ -89,12 +103,21 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
                     qa_flag="; ".join(row_flags),
                 )
             )
+
+            write_workbook(rows, output_path)
+
+            elapsed = time.monotonic() - start_time
+            avg_per_company = elapsed / i
+            remaining = avg_per_company * (len(companies) - i)
+            print(
+                f"  checkpoint saved -- elapsed {elapsed / 60:.1f}m, "
+                f"est. {remaining / 60:.1f}m remaining "
+                f"({avg_per_company:.0f}s/company avg)"
+            )
     finally:
         crustdata.close()
 
     print(crustdata.counter.summary())
     print(f"QA summary: {qa_flagged}/{len(rows)} rows flagged for review")
-
-    output_path = write_workbook(rows, sector, mode)
     print(f"Workbook written: {output_path}")
     return output_path
