@@ -35,17 +35,18 @@ ROLES = (ROLE_HR_TA, ROLE_OPS_SCM)
 TEST_MODE_MAX_COMPANIES = 10
 FULL_MODE_MAX_COMPANIES = 100
 
-# Free-tier Flash model, referenced by Google's own rolling alias rather
-# than a specific version. A first real run hit a confirmed Gemini quirk:
-# GET /v1beta/models listed "gemini-2.5-flash" as supporting generateContent,
-# but POSTing to it 404'd anyway (a known, unresolved issue on Google's own
-# forum -- the list endpoint can list a model as available when it isn't
-# actually callable for a given key). "gemini-flash-latest" is an alias
-# Google maintains to route to whatever Flash model is actually live, which
-# sidesteps that mismatch. If this ever 404s too, run the PowerShell
-# snippet in README.md's troubleshooting section to see what your key can
-# actually call, and hardcode that instead.
-GEMINI_MODEL = "gemini-flash-latest"
+# Free-tier Flash-Lite model, via Google's own rolling alias. History:
+#   - "gemini-2.5-flash" (pinned): listed as available by GET /v1beta/models
+#     but 404'd on generateContent -- a known, unresolved Google-side quirk.
+#   - "gemini-flash-latest" (alias): resolved fine, but real runs hit
+#     sustained 429/503 -- the full Flash alias appears to route to a
+#     heavily-loaded model under free-tier traffic.
+#   - "gemini-flash-lite-latest" (alias, current): confirmed working via a
+#     direct test call, currently resolving to gemini-3.5-flash-lite. The
+#     Lite tier draws from a separate, less congested capacity pool.
+# If this one also starts failing, use the PowerShell snippet in README.md's
+# troubleshooting section to find what your key can actually call right now.
+GEMINI_MODEL = "gemini-flash-lite-latest"
 
 
 @dataclass(frozen=True)

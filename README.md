@@ -28,23 +28,44 @@ look is the `fields`/response paths at the top of `crustdata_client.py`
 `--count 1 --mode test` and print the raw response if a field comes back
 empty unexpectedly.
 
-## Troubleshooting: Gemini 404 on generateContent
+## Troubleshooting: Gemini won't respond
 
-A first real run hit a confirmed Gemini quirk: `GET /v1beta/models` lists a
-model (e.g. `gemini-2.5-flash`) as supporting `generateContent`, but
-actually calling it 404s anyway for that account/key. `GEMINI_MODEL` in
-`src/config.py` is set to `gemini-flash-latest`, an alias Google maintains
-to route around this, but if it ever breaks again, find out what your key
-can actually call:
+Two distinct problems showed up during setup, both worth knowing about if
+`GEMINI_MODEL` in `src/config.py` (currently `gemini-flash-lite-latest`)
+ever needs to change again:
+
+**A pinned model name 404s even though it's listed as available.**
+`GET /v1beta/models` can list a model (e.g. `gemini-2.5-flash`) as
+supporting `generateContent`, but actually calling it 404s anyway for that
+account/key -- a known, unresolved Gemini quirk. Prefer a `-latest` alias
+(`gemini-flash-latest`, `gemini-flash-lite-latest`) over a pinned dotted
+version; aliases route to whatever's actually live for your key.
+
+**An alias itself returns sustained 429/503.** `gemini-flash-latest`
+(the full, non-Lite alias) hit persistent rate-limit/overload errors on
+this project's free tier, while `gemini-flash-lite-latest` worked --
+the Lite tier appears to draw from a separate, less congested capacity
+pool. If whatever `GEMINI_MODEL` is set to starts failing, test a specific
+model name directly before changing the config:
+
+```powershell
+$body = @{ contents = @(@{ parts = @(@{ text = "Say hello in one word." }) }) } | ConvertTo-Json -Depth 5
+try {
+  Invoke-RestMethod -Uri "https://generativelanguage.googleapis.com/v1beta/models/MODEL_NAME:generateContent?key=YOUR_KEY" -Method Post -Body $body -ContentType "application/json"
+} catch {
+  $_.Exception.Response.StatusCode
+  $_.ErrorDetails.Message
+}
+```
+
+Or list everything your key can currently see (not the same as what it can
+actually *call* -- see above):
 
 ```powershell
 (Invoke-RestMethod -Uri "https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_KEY").models |
   Where-Object { $_.supportedGenerationMethods -contains "generateContent" } |
   Select-Object name
 ```
-
-Pick a name from that list (or another `-latest` alias if one is offered)
-and update `GEMINI_MODEL`.
 
 ## Setup
 
