@@ -35,10 +35,17 @@ ROLES = (ROLE_HR_TA, ROLE_OPS_SCM)
 TEST_MODE_MAX_COMPANIES = 10
 FULL_MODE_MAX_COMPANIES = 100
 
-# Free-tier Flash model. Confirm this is still current at
-# https://ai.google.dev/gemini-api/docs/models before a real run --
-# Google periodically renames/retires Flash generations.
-GEMINI_MODEL = "gemini-2.5-flash"
+# Free-tier Flash model, referenced by Google's own rolling alias rather
+# than a specific version. A first real run hit a confirmed Gemini quirk:
+# GET /v1beta/models listed "gemini-2.5-flash" as supporting generateContent,
+# but POSTing to it 404'd anyway (a known, unresolved issue on Google's own
+# forum -- the list endpoint can list a model as available when it isn't
+# actually callable for a given key). "gemini-flash-latest" is an alias
+# Google maintains to route to whatever Flash model is actually live, which
+# sidesteps that mismatch. If this ever 404s too, run the PowerShell
+# snippet in README.md's troubleshooting section to see what your key can
+# actually call, and hardcode that instead.
+GEMINI_MODEL = "gemini-flash-latest"
 
 
 @dataclass(frozen=True)

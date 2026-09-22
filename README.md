@@ -28,6 +28,24 @@ look is the `fields`/response paths at the top of `crustdata_client.py`
 `--count 1 --mode test` and print the raw response if a field comes back
 empty unexpectedly.
 
+## Troubleshooting: Gemini 404 on generateContent
+
+A first real run hit a confirmed Gemini quirk: `GET /v1beta/models` lists a
+model (e.g. `gemini-2.5-flash`) as supporting `generateContent`, but
+actually calling it 404s anyway for that account/key. `GEMINI_MODEL` in
+`src/config.py` is set to `gemini-flash-latest`, an alias Google maintains
+to route around this, but if it ever breaks again, find out what your key
+can actually call:
+
+```powershell
+(Invoke-RestMethod -Uri "https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_KEY").models |
+  Where-Object { $_.supportedGenerationMethods -contains "generateContent" } |
+  Select-Object name
+```
+
+Pick a name from that list (or another `-latest` alias if one is offered)
+and update `GEMINI_MODEL`.
+
 ## Setup
 
 1. Create the repo and add secrets (PowerShell):
