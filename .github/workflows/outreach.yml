@@ -24,7 +24,12 @@ on:
 jobs:
   outreach:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A full 100-company run makes up to ~201 Gemini calls (1 discovery +
+    # up to 200 drafting) at 6s of deliberate pacing each -- roughly 20
+    # minutes of pacing alone, before actual response time, Crustdata
+    # calls, or any retry backoff. 30 minutes was too tight (see git log);
+    # 90 leaves real headroom for a run that hits some retries too.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
