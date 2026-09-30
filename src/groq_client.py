@@ -16,10 +16,22 @@ Confirmed from Groq's docs (console.groq.com/docs):
     tokens/day. Tokens-per-minute is the binding limit for this pipeline.
   - 429 responses carry a "retry-after" header (seconds).
   - Key from https://console.groq.com/keys -- free, no credit card.
+
+Also exposes chat_with_browser_search() -- Groq's built-in real-time web
+search tool on the openai/gpt-oss-* models, used by groq_contact_search.py
+as the free contact-research fallback once Crustdata's balance runs out
+(replacing an earlier Gemini-Search-grounding attempt that turned out to
+be structurally unworkable: Gemini 2.5, the only family with free
+grounding, is closed to new Google accounts, and Gemini 3.x has no free
+grounding at all -- confirmed via live 404s, not assumption). Groq's
+`groq/compound*` models (its OWN earlier grounded-search offering) were
+separately decommissioned 2026-09-21, but browser_search on gpt-oss is a
+distinct, currently-active feature -- confirmed via Groq's own docs.
 """
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import httpx
@@ -76,6 +88,10 @@ def _retry_after(resp: httpx.Response) -> float | None:
 
 
 def _call_one_model(model: str, body: dict, api_key: str) -> tuple[dict | None, Exception | None]:
+    """Returns the FULL response dict (not just parsed content), since
+    generate_json() needs choices[0].message.content parsed as JSON while
+    chat_with_browser_search() also needs choices[0].message.executed_tools,
+    which isn't reachable from content alone."""
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     last_error: Exception | None = None
 
@@ -98,8 +114,12 @@ def _call_one_model(model: str, body: dict, api_key: str) -> tuple[dict | None, 
                     continue
 
                 resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                return json.loads(content), None
+                data = resp.json()
+                # Touch the path now so a malformed body is caught here
+                # (and retried) rather than surfacing later in a caller
+                # that assumed success.
+                _ = data["choices"][0]["message"]
+                return data, None
 
             except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
                 last_error = exc
@@ -156,11 +176,80 @@ def generate_json(
 
     last_error: Exception | None = None
     for model in GROQ_MODELS:
-        result, error = _call_one_model(model, body, api_key)
-        if result is not None:
+        data, error = _call_one_model(model, body, api_key)
+        if data is not None:
             time.sleep(PACING_SECONDS_AFTER_SUCCESS)
-            return result
+            content = data["choices"][0]["message"]["content"]
+            return json.loads(content)
         last_error = error
         print(f"  Groq model '{model}' failed ({error}), trying next Groq model if any remain")
 
     raise RuntimeError(f"Groq call failed on all models {GROQ_MODELS}: {last_error}")
+
+
+_URL_PATTERN = re.compile(r'https?://[^\s"\'<>\\)]+')
+
+
+def _extract_urls(executed_tools) -> list[str]:
+    """Pulls every URL out of the executed_tools field, whatever its exact
+    nesting -- Groq's docs describe executed_tools as carrying the browser
+    search's raw queries/results but don't pin down an exact schema, so
+    this reads it as an opaque blob and regex-extracts URLs rather than
+    assuming a specific key path that might not match reality (the same
+    "don't trust the docs' shape, verify against real output" lesson this
+    project has hit repeatedly)."""
+    if not executed_tools:
+        return []
+    blob = json.dumps(executed_tools)
+    seen: dict[str, None] = {}
+    for match in _URL_PATTERN.finditer(blob):
+        seen[match.group(0)] = None
+    return list(seen)
+
+
+def chat_with_browser_search(
+    prompt: str,
+    api_key: str,
+    system_instruction: str | None = None,
+    models: list[str] = GROQ_MODELS,
+    max_output_tokens: int = 2048,
+) -> tuple[str, list[str]]:
+    """Calls Groq's built-in `browser_search` tool (real-time web search,
+    supported on the openai/gpt-oss-* models) -- lets the model search the
+    live web rather than answering from training data. Returns
+    (text, cited_urls), where cited_urls comes from the response's
+    executed_tools field (see _extract_urls).
+
+    Can't combine tool_choice="required" for browser_search with strict
+    response_format json_schema mode -- documented as unreliable on
+    gpt-oss-120b (response_format silently ignored). `text` is therefore
+    free-form; parse it tolerantly (see contact_verification.py) rather
+    than relying on schema enforcement, same approach already used for
+    Gemini's grounding in gemini_client.py.
+    """
+    messages = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+    messages.append({"role": "user", "content": prompt})
+
+    body = {
+        "messages": messages,
+        "tools": [{"type": "browser_search"}],
+        "tool_choice": "required",
+        "max_completion_tokens": min(max_output_tokens, MAX_COMPLETION_TOKENS_CAP),
+        "temperature": 0.3,
+    }
+
+    last_error: Exception | None = None
+    for model in models:
+        data, error = _call_one_model(model, body, api_key)
+        if data is not None:
+            time.sleep(PACING_SECONDS_AFTER_SUCCESS)
+            message = data["choices"][0]["message"]
+            text = message.get("content") or ""
+            sources = _extract_urls(message.get("executed_tools"))
+            return text, sources
+        last_error = error
+        print(f"  Groq model '{model}' failed ({error}), trying next Groq model if any remain")
+
+    raise RuntimeError(f"Groq browser_search call failed on all models {models}: {last_error}")

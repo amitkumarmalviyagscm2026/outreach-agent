@@ -98,49 +98,50 @@ actually *call* -- see above):
   Select-Object name
 ```
 
-## Troubleshooting: the Gemini Search contact fallback
+## Troubleshooting: the Groq Search contact fallback
 
-**Live-tested 2026-09-30 and found broken, then fixed** -- a real run hit a
-sustained 429 on every single grounded call, no matter the backoff. Root
-cause, confirmed against Google's own pricing page: `gemini-flash-lite-latest`
-resolves to a **Gemini 3.x** model, and Gemini 3.x gets **no free-tier
-Google Search grounding at all** -- it's a paid-only feature there (5,000
-requests/month once billing is enabled). Only **Gemini 2.5 Flash** and
-**Gemini 2.5 Flash-Lite** get free grounding (500 requests/day, shared
-between the two). The fallback now calls `gemini-2.5-flash-lite`
-specifically for grounded search (`config.py`'s `GEMINI_GROUNDING_MODELS`),
-kept separate from `GEMINI_MODELS` (used for discovery.py's plain,
-non-grounded calls, where the 3.x model is fine).
+This fallback has had two dead ends before landing on its current design --
+both confirmed live, not assumed, on 2026-09-30:
 
-Groq was considered as a replacement for Gemini here too, since it's a
-separate quota entirely -- ruled out because Groq's only web-search-capable
-models (`groq/compound`, `groq/compound-beta`) were decommissioned on
-2026-09-21 (confirmed via Groq's own docs). Groq's remaining chat models
-have no browsing tool on the free tier, so they can't look up a real,
-verifiable LinkedIn profile -- only Gemini's 2.5-family grounding can, for
-this pipeline's free-tier constraints.
+1. **Google Custom Search JSON API** -- closed to new Google Cloud accounts
+   entirely (live 403s, no workaround, deprecated by 2027 even for existing
+   customers).
+2. **Gemini's own Google Search grounding** -- looked promising (a free
+   quota on the same `GEMINI_API_KEY` already in use), but turned out
+   structurally unworkable on a new Google account: Gemini 2.5 (the only
+   model family with any free-tier grounding) returned a live 404 --
+   *"This model ... is no longer available to new users"* -- and Gemini 3.x
+   (what this account's key CAN call) gets **no free-tier grounding at
+   all**, paid-only. No model name swap could fix this.
 
-If a run reaches the fallback (its log line starts with "Switching to the
-free Gemini Search fallback") and it's still misbehaving, check the log for:
+The current fallback uses **Groq's `browser_search` built-in tool** on
+`openai/gpt-oss-120b` / `openai/gpt-oss-20b` -- a real-time web search
+capability, confirmed active via Groq's own docs as of 2026-09-30. This is
+a *different* feature from Groq's `groq/compound` / `groq/compound-beta`
+models, which were separately decommissioned on 2026-09-21 and would not
+have worked either. It needs `GROQ_API_KEY` (see Setup) -- without it,
+there's no contact-search fallback at all, only Crustdata.
+
+⚠️ **This has not yet been exercised against the live API.** If a run
+reaches the fallback (its log line starts with "Switching to the free Groq
+Search fallback") and it's misbehaving, check the log for:
 
 - **`unparseable response`** -- the model didn't return valid JSON (or
-  didn't wrap it the way `_parse_json_loosely` expects). The log prints
-  the first 300 characters of what it actually said; if it's consistently
-  ignoring the "respond with only a JSON object" instruction, the prompt
-  in `gemini_contact_search.py`'s `SYSTEM_PROMPT` needs tightening.
+  didn't wrap it the way `parse_json_loosely` expects). The log prints the
+  first 300 characters of what it actually said; if it's consistently
+  ignoring the "respond with only a JSON object" instruction, the prompt in
+  `groq_contact_search.py`'s `SYSTEM_PROMPT` needs tightening.
 - **`claimed URL not found among cited sources`** -- the model reported a
-  LinkedIn URL that didn't match any of Gemini's actual search citations,
-  so it was correctly discarded rather than trusted blindly. The log
-  prints the citation URLs it actually got back. If these are
-  consistently Google redirect links (e.g.
-  `vertexaisearch.cloud.google.com/...`) rather than direct `linkedin.com`
-  URLs, the exact-match comparison in `_url_is_verified()` needs to
-  resolve redirects, or relax to "a citation exists at all" instead of an
-  exact match -- tell Claude this specific symptom if you hit it.
-- **429s persist even on `gemini-2.5-flash-lite`** -- check the AI Studio
-  Rate Limit dashboard for its actual current RPM; the 500 RPD free pool is
-  shared with `gemini-2.5-flash`, so heavy use of either eats the other's
-  headroom.
+  LinkedIn URL that didn't match any URL pulled from the response's
+  `executed_tools` field, so it was correctly discarded rather than trusted
+  blindly. The log prints the URLs it actually found. If `executed_tools`'
+  real shape doesn't carry usable URLs at all (Groq's docs don't pin down
+  its exact schema), `groq_client._extract_urls()` needs adjusting --
+  tell Claude this specific symptom if you hit it.
+- **A `RuntimeError` about the request itself** -- e.g. a 404/400 naming a
+  model that no longer exists on Groq's side, similar to what happened
+  twice already with Gemini model names in this project. Paste the exact
+  error.
 
 ## Setup
 
@@ -158,14 +159,16 @@ free Gemini Search fallback") and it's still misbehaving, check the log for:
    limited rather than a spend-based trial, so it doesn't run out the way
    a paid API's trial credit does.
 
-   **Optional but recommended:** add `GROQ_API_KEY` as a third secret — a
-   free key from [console.groq.com/keys](https://console.groq.com/keys), no
-   credit card. Groq is a separate service used as a backup LLM: when
-   Gemini's free tier is overloaded (sustained 503s, which happened on
-   several real runs), calls hand off to Groq instead of failing. Without
-   it, the pipeline runs on Gemini alone.
+   **Add `GROQ_API_KEY` as a third secret** — a free key from
+   [console.groq.com/keys](https://console.groq.com/keys), no credit card.
+   It's no longer just a nice-to-have: Groq now does double duty as (a) the
+   backup LLM for discovery.py when Gemini's free tier is overloaded, and
+   (b) the **only** contact-search fallback once Crustdata's credit balance
+   runs out. Without it, the pipeline still works, but a Crustdata
+   exhaustion mid-run leaves all remaining companies blank instead of
+   falling back to anything.
 
-   How the fallback behaves (`src/llm.py`):
+   How the backup-LLM fallback behaves (`src/llm.py`):
    - Gemini is always tried first.
    - With Groq configured, Gemini gets 3 retries instead of 5, so a failing
      call hands off in ~40 seconds rather than ~3 minutes.
@@ -175,29 +178,22 @@ free Gemini Search fallback") and it's still misbehaving, check the log for:
    - Groq free tier: 30 requests/minute, 1,000/day, 8K tokens/minute per
      model (`openai/gpt-oss-120b`, then `openai/gpt-oss-20b`).
 
-   **The fallback for when Crustdata's credit balance runs out needs no
-   extra secret.** Crustdata itself has no free tier — this doesn't
-   replace it, it just keeps a run going with lower-confidence contacts
-   (flagged as `sourced via free Gemini Search fallback -- verify` in the
-   output) instead of leaving every remaining company blank.
+   *(History: this fallback went through two dead ends before landing on
+   Groq -- Google's Custom Search JSON API turned out closed to new Google
+   Cloud accounts entirely, and Gemini's own Search grounding turned out
+   closed to new Google accounts on the one model that has it free at all.
+   Both confirmed via live errors, not assumption -- see Troubleshooting
+   below and the git log for the full story.)*
 
-   *(History: an earlier version of this used Google's standalone Custom
-   Search JSON API, which turned out to be closed to new Google Cloud
-   accounts entirely — a real error confirmed against the live API, not a
-   setup mistake. It's been replaced with Gemini's own Google Search
-   grounding feature instead, which needs nothing beyond the
-   `GEMINI_API_KEY` already set up above.)*
-
-   How it works (`src/gemini_contact_search.py`): once Crustdata is
-   exhausted, each remaining company gets up to 2 Gemini calls (HR/TA,
-   Ops/SCM) with Google Search grounding enabled, asking the model to
-   search for and cite a real LinkedIn profile. The model's claimed URL
-   is **never trusted on its word** — it's cross-checked against the
-   actual search citations Gemini returned, and discarded (left blank)
-   if it doesn't match a real citation. Free tier: 500 grounded search
-   requests/day, but only on Gemini 2.5 Flash / 2.5 Flash-Lite — see
-   Troubleshooting below for why this fallback deliberately uses a
-   different model than the rest of the pipeline.
+   How the contact-search fallback works (`src/groq_contact_search.py`):
+   once Crustdata is exhausted, each remaining company gets up to 2 Groq
+   calls (HR/TA, Ops/SCM) with the `browser_search` built-in tool enabled,
+   asking the model to search for and cite a real LinkedIn profile. The
+   model's claimed URL is **never trusted on its word** — it's cross-checked
+   against URLs pulled from the response's `executed_tools` field, and
+   discarded (left blank) if it doesn't match a real one the tool actually
+   surfaced. Flagged as `sourced via free Groq Search fallback -- verify`
+   in the output.
 
 2. Local dev (optional but recommended before pushing):
    ```powershell
@@ -248,7 +244,7 @@ python run.py --sector "Pharma" --count 1 --mode test
 | Stage | File | What it does |
 |---|---|---|
 | 1. Discover | `src/discovery.py` | One LLM call (Gemini, Groq as backup) **for the whole run**: sector → ranked top-N company names (JSON, not free text) |
-| 2. Research | `src/contact_search.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword. Falls back to Gemini Search grounding for the rest of the run once Crustdata's balance is exhausted (free, no extra secret, lower confidence — see Setup) |
+| 2. Research | `src/contact_search.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword. Falls back to Groq Search (`browser_search` tool) for the rest of the run once Crustdata's balance is exhausted (needs `GROQ_API_KEY`, lower confidence — see Setup) |
 | 3. Draft | `src/drafting.py` + `src/templates.py` | **No LLM call.** A fixed template per role, filled in with the contact's name, honorific, title, and company — see below |
 | 4. Validate | `src/qa.py` | Length, combined-salutation, placeholder, malformed-link, and orphan-message checks; failures get a `QA_FLAG`, never silently dropped |
 | 5. Write | `src/workbook.py` | `.xlsx` with real clickable LinkedIn hyperlinks (not bare URLs), frozen header row |
@@ -301,10 +297,10 @@ section above still applies to that one call, just far less often.
 - Contact scope is fixed at exactly 2 roles per company (HR/TA, Ops/SCM),
   not the full CEO/COO/CHRO/Plant-Head/Campus-Recruiter list, specifically
   to keep per-run cost predictable.
-- If Crustdata's balance runs out mid-run, the rest of the run switches
-  to the free Gemini Search fallback rather than stopping — see Setup
-  for what this trades off (lower-confidence contacts, flagged in the
-  output).
+- If Crustdata's balance runs out mid-run, the rest of the run switches to
+  the free Groq Search fallback (if `GROQ_API_KEY` is set) rather than
+  stopping — see Setup for what this trades off (lower-confidence
+  contacts, flagged in the output).
 
 ## What it deliberately won't do
 

@@ -1,5 +1,5 @@
-"""Offline end-to-end test of the pipeline: Gemini and Crustdata are faked,
-so this exercises the orchestration (one drafting call per company,
+"""Offline end-to-end test of the pipeline: Gemini, Groq, and Crustdata are
+faked, so this exercises the orchestration (one drafting call per company,
 search_name used for Crustdata, per-company checkpointing, QA flags)
 without any network calls or cost."""
 import os
@@ -15,7 +15,7 @@ from src.discovery import Company
 class FakeContactSearchService:
     searched: list[str] = []
 
-    def __init__(self, crustdata_key, google_key, google_cx):
+    def __init__(self, crustdata_key, groq_key):
         pass
 
     def get_two_contacts(self, company_name):

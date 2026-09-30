@@ -33,10 +33,15 @@ generate_json() therefore does two things beyond a naive retry loop:
      per-project quota can still leave headroom on a model that hasn't
      been hit as hard yet.
 
-Also exposes generate_grounded_text() -- Gemini with Google Search
-grounding enabled, used by gemini_contact_search.py as the free contact-
-research fallback once Crustdata's balance runs out. See that function's
-docstring for why it can't reuse generate_json()'s strict-schema mode.
+History: this module used to also expose generate_grounded_text() (Gemini
+with Google Search grounding enabled), used as the free contact-search
+fallback once Crustdata's balance ran out. Removed -- turned out
+structurally unworkable on this account: Gemini 2.5 (the only family with
+free grounding) is closed to new Google accounts ("no longer available to
+new users", a live 404 with that exact message), and Gemini 3.x (what
+GEMINI_MODELS below actually calls) gets no free grounding at all,
+paid-only. See groq_contact_search.py for the replacement (Groq's
+browser_search tool), and git log for the full removal.
 """
 from __future__ import annotations
 
@@ -93,11 +98,9 @@ def _call_one_model(
     """Tries a single model, up to `retries` times. Returns
     (raw_response_json, None) on success or (None, last_error) on
     exhaustion -- never raises, so the caller can cleanly fall through to
-    the next model in the list. Returns the FULL response dict (not just
-    the text), since callers differ in what they need: generate_json()
-    parses candidates[0].content.parts[0].text as JSON, while
-    generate_grounded_text() also needs candidates[0].groundingMetadata,
-    which isn't reachable from text alone."""
+    the next model in the list. Returns the full response dict; the only
+    caller, generate_json(), parses candidates[0].content.parts[0].text
+    as JSON."""
     url = f"{BASE_URL}/models/{model}:generateContent?key={api_key}"
     last_error: Exception | None = None
 
@@ -129,9 +132,7 @@ def _call_one_model(
                 data = resp.json()
                 # Touch the path now so a malformed/empty response is
                 # caught here (and retried) rather than surfacing later in
-                # a caller that assumed success. Callers use the full
-                # `data` dict, not just this text, so grounding metadata
-                # (see generate_grounded_text) is still available.
+                # a caller that assumed success.
                 _ = data["candidates"][0]["content"]["parts"][0]["text"]
                 return data, None
 
@@ -202,59 +203,3 @@ def generate_json(
         print(f"  Model '{model}' exhausted its retries, trying next model if any remain")
 
     raise RuntimeError(f"Gemini call failed on all models {models}: {last_error}")
-
-
-def generate_grounded_text(
-    models: list[str],
-    prompt: str,
-    api_key: str,
-    system_instruction: str | None = None,
-    max_output_tokens: int = 2048,
-    retries: int = RETRIES_PER_MODEL,
-) -> tuple[str, list[dict]]:
-    """Calls Gemini with Google Search grounding enabled (the "tools":
-    [{"google_search": {}}] request field) -- lets the model search the
-    live web and cite what it found, rather than answering from its own
-    training data. Returns (text, grounding_sources), where
-    grounding_sources is the list of {"title", "uri"} the model actually
-    cited (from candidates[0].groundingMetadata.groundingChunks[].web).
-
-    Cannot be combined with response_mime_type="application/json" +
-    response_schema (generate_json's strict mode) -- Gemini rejects that
-    combination except on the Pro-tier models, which this free-tier
-    pipeline doesn't use. `text` is therefore free-form; a caller that
-    wants JSON out of it must parse it tolerantly (see
-    gemini_contact_search.py) rather than relying on schema enforcement.
-
-    Free tier: 500 grounded search requests/day, shared between the
-    Gemini 2.5 Flash and Gemini 2.5 Flash-Lite models (confirmed at
-    ai.google.dev/gemini-api/docs/pricing) -- the same GEMINI_API_KEY
-    already used for discovery.py, no separate signup or secret needed.
-    Gemini 3.x models get NO free-tier grounding at all (paid-only, 5,000
-    requests/month), which is why `models` here must be a 2.5-family
-    model (see config.py's GEMINI_GROUNDING_MODELS), not GEMINI_MODELS.
-    """
-    body: dict = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}],
-        "generationConfig": {"maxOutputTokens": max_output_tokens},
-    }
-    if system_instruction:
-        body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-
-    last_error: Exception | None = None
-    for model in models:
-        data, error = _call_one_model(model, body, api_key, retries)
-        if data is not None:
-            time.sleep(PACING_SECONDS_AFTER_SUCCESS)
-            candidate = data["candidates"][0]
-            text = candidate["content"]["parts"][0]["text"]
-            chunks = (candidate.get("groundingMetadata") or {}).get("groundingChunks") or []
-            sources = [c["web"] for c in chunks if "web" in c and c["web"].get("uri")]
-            return text, sources
-        last_error = error
-        if isinstance(error, RuntimeError):
-            raise error
-        print(f"  Model '{model}' exhausted its retries, trying next model if any remain")
-
-    raise RuntimeError(f"Gemini grounded call failed on all models {models}: {last_error}")

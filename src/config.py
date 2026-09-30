@@ -58,25 +58,14 @@ FULL_MODE_MAX_COMPANIES = 100
 # adding it here -- don't repeat the mistake above.
 GEMINI_MODELS = ["gemini-flash-lite-latest"]
 
-# Models used ONLY for the grounded (Google Search) contact-search fallback
-# in gemini_contact_search.py -- deliberately NOT the same list as
-# GEMINI_MODELS above. Confirmed on Google's own pricing page
-# (ai.google.dev/gemini-api/docs/pricing) on 2026-09-30:
-#   - Gemini 3.x models (which "gemini-flash-lite-latest" resolves to --
-#     Gemini 3.5 Flash Lite) get NO free-tier grounding at all ("Not
-#     available"); it's paid-only, 5,000 requests/MONTH once billing is on.
-#     This is why every live grounded call was hitting a 429 that no
-#     backoff could ever clear -- it wasn't rate limiting, it was a
-#     free-tier account calling a feature that free tier doesn't grant on
-#     this model. An earlier version of this file/README wrongly stated
-#     "5,000 free grounded searches/month" for the fallback -- that number
-#     is real, but it's the PAID tier's allowance, not free's.
-#   - Gemini 2.5 Flash and Gemini 2.5 Flash-Lite DO get free grounding:
-#     500 RPD, shared between the two models, at no charge.
-# So the grounding fallback must use a 2.5-family model, not the 3.x model
-# used elsewhere in this pipeline. Verify RPM on the AI Studio Rate Limit
-# dashboard before changing this.
-GEMINI_GROUNDING_MODELS = ["gemini-2.5-flash-lite"]
+# History: this file used to also define GEMINI_GROUNDING_MODELS, for a
+# Gemini-Search-grounding-based contact fallback. Removed 2026-09-30 --
+# turned out structurally unworkable on this account: the only model with
+# a real, non-404 grounding call, gemini-2.5-flash-lite, itself 404'd with
+# "This model ... is no longer available to new users" (confirmed live,
+# not assumed), and the model this account CAN call (gemini-flash-lite-latest,
+# Gemini 3.x) gets no free grounding at all. See groq_contact_search.py for
+# the replacement (Groq's browser_search tool, GROQ_API_KEY below).
 
 
 @dataclass(frozen=True)
@@ -108,19 +97,19 @@ def load_secrets() -> Secrets:
         )
         sys.exit(1)
 
-    # Optional: the backup LLM (see src/llm.py). Without it, the pipeline
-    # runs on Gemini alone, exactly as before.
+    # Optional, but now does double duty: the backup LLM for discovery.py
+    # (see src/llm.py) AND the only contact-search fallback once
+    # Crustdata's balance runs out (see src/contact_search.py,
+    # groq_contact_search.py). Without it, the pipeline still runs on
+    # Gemini alone for discovery, but a Crustdata exhaustion mid-run just
+    # leaves remaining companies blank with a QA flag -- no fallback.
     groq_key = os.environ.get("GROQ_API_KEY", "").strip() or None
     if groq_key:
         print("Backup LLM: Groq configured -- will take over if Gemini is unavailable")
+        print("Contact fallback: Groq browser_search -- free, kicks in if Crustdata runs out")
     else:
         print("Backup LLM: none (set GROQ_API_KEY to enable Groq fallback)")
-
-    # The contact-search fallback (see src/contact_search.py,
-    # gemini_contact_search.py) needs no extra secret -- it's Gemini's own
-    # Google Search grounding feature, on the same GEMINI_API_KEY above.
-    # Kicks in only once Crustdata's credit balance is exhausted.
-    print("Contact fallback: Gemini Search grounding -- free, 500 grounded searches/day, kicks in if Crustdata runs out")
+        print("Contact fallback: none -- set GROQ_API_KEY to fall back once Crustdata's credits run out")
 
     return Secrets(crustdata_api_key=crustdata_key, gemini_api_key=gemini_key, groq_api_key=groq_key)
 

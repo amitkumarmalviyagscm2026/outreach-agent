@@ -172,7 +172,7 @@ class Contact:
     name: str | None = None
     title: str | None = None
     linkedin_url: str | None = None
-    source: str = "crustdata"  # "crustdata" or "google_search" -- see contact_search.py
+    source: str = "crustdata"  # "crustdata" or "groq_search" -- see contact_search.py
 
 
 class CrustdataExhausted(RuntimeError):

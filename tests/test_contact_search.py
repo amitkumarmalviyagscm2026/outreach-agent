@@ -1,6 +1,6 @@
-"""ContactSearchService routing: Crustdata first, Gemini Search grounding
-fallback only after Crustdata signals an exhausted balance, and only for
-the rest of the run from that point on."""
+"""ContactSearchService routing: Crustdata first, Groq Search fallback
+only after Crustdata signals an exhausted balance, and only for the rest
+of the run from that point on."""
 from src.contact_search import ContactSearchService
 from src.crustdata_client import Contact, CrustdataExhausted
 
@@ -26,60 +26,69 @@ class FakeCrustdata:
         pass
 
 
-def _service(monkeypatch):
+def _service(monkeypatch, groq_api_key="groq-key"):
     import src.contact_search as mod
 
     fake_crustdata = FakeCrustdata()
     monkeypatch.setattr(mod, "CrustdataClient", lambda key: fake_crustdata)
 
-    gemini_calls: list[tuple[str, str]] = []
+    groq_calls: list[tuple[str, str]] = []
 
-    def fake_gemini_find(role, company_name, keywords, api_key, models, exclude=None):
-        gemini_calls.append((role, company_name))
-        return Contact(role=role, name=f"Gemini-{role}", linkedin_url="https://linkedin.com/in/x", source="gemini_search")
+    def fake_groq_find(role, company_name, keywords, api_key, exclude=None):
+        groq_calls.append((role, company_name))
+        return Contact(role=role, name=f"Groq-{role}", linkedin_url="https://linkedin.com/in/x", source="groq_search")
 
-    monkeypatch.setattr(mod, "gemini_find_contact", fake_gemini_find)
+    monkeypatch.setattr(mod, "groq_find_contact", fake_groq_find)
 
-    svc = ContactSearchService("crust-key", "gemini-key", ["gemini-flash-lite-latest"])
-    return svc, fake_crustdata, gemini_calls
+    svc = ContactSearchService("crust-key", groq_api_key)
+    return svc, fake_crustdata, groq_calls
 
 
 def test_crustdata_used_while_it_has_balance(monkeypatch):
-    svc, crustdata, gemini_calls = _service(monkeypatch)
+    svc, crustdata, groq_calls = _service(monkeypatch)
     hr, ops = svc.get_two_contacts("Cipla")
     assert hr.name == "Priya" and hr.source == "crustdata"
-    assert gemini_calls == []
+    assert groq_calls == []
 
 
-def test_falls_back_to_gemini_after_crustdata_exhausted(monkeypatch):
-    svc, crustdata, gemini_calls = _service(monkeypatch)
+def test_falls_back_to_groq_after_crustdata_exhausted(monkeypatch):
+    svc, crustdata, groq_calls = _service(monkeypatch)
     crustdata.exhausted_after = "Sun Pharma"
 
     svc.get_two_contacts("Cipla")  # works fine
     hr, ops = svc.get_two_contacts("Sun Pharma")  # exhausts here, falls back same company
-    assert hr.source == "gemini_search"
-    assert gemini_calls == [("hr_ta", "Sun Pharma"), ("ops_scm", "Sun Pharma")]
+    assert hr.source == "groq_search"
+    assert groq_calls == [("hr_ta", "Sun Pharma"), ("ops_scm", "Sun Pharma")]
 
-    gemini_calls.clear()
+    groq_calls.clear()
     svc.get_two_contacts("Zydus")  # Crustdata skipped entirely from now on
     assert crustdata.calls == ["Cipla", "Sun Pharma"]  # never called again for Zydus
-    assert gemini_calls == [("hr_ta", "Zydus"), ("ops_scm", "Zydus")]
+    assert groq_calls == [("hr_ta", "Zydus"), ("ops_scm", "Zydus")]
 
 
 def test_summary_reports_both_sources_once_fallback_used(monkeypatch):
-    svc, crustdata, gemini_calls = _service(monkeypatch)
+    svc, crustdata, groq_calls = _service(monkeypatch)
     crustdata.exhausted_after = "Cipla"
     svc.get_two_contacts("Cipla")
 
     summary = svc.summary()
     assert "crustdata summary" in summary
-    assert "Gemini Search fallback" in summary
+    assert "Groq Search fallback" in summary
     assert "2 calls" in summary  # hr_ta + ops_scm
     assert "2 contacts found" in summary
 
 
-def test_summary_omits_gemini_section_when_never_used(monkeypatch):
-    svc, crustdata, gemini_calls = _service(monkeypatch)
+def test_summary_omits_groq_section_when_never_used(monkeypatch):
+    svc, crustdata, groq_calls = _service(monkeypatch)
     svc.get_two_contacts("Cipla")  # Crustdata has balance, fallback never triggered
 
-    assert "Gemini Search fallback" not in svc.summary()
+    assert "Groq Search fallback" not in svc.summary()
+
+
+def test_no_fallback_without_groq_api_key(monkeypatch):
+    svc, crustdata, groq_calls = _service(monkeypatch, groq_api_key=None)
+    crustdata.exhausted_after = "Cipla"
+
+    hr, ops = svc.get_two_contacts("Cipla")
+    assert hr.name is None and hr.source == "crustdata"  # blank, not fabricated
+    assert groq_calls == []

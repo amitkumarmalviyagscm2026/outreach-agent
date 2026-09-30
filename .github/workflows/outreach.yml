@@ -25,7 +25,7 @@ jobs:
   outreach:
     runs-on: ubuntu-latest
     # Drafting no longer calls an LLM (see templates.py). Gemini is called
-    # once per run for discovery, plus up to 2 grounded-search calls per
+    # once per run for discovery, plus up to 2 Groq browser_search calls per
     # company if Crustdata's balance runs out mid-run (contact_search.py).
     # 90 minutes leaves real headroom for a full 100-company run.
     timeout-minutes: 90
@@ -43,8 +43,10 @@ jobs:
         env:
           CRUSTDATA_API_KEY: ${{ secrets.CRUSTDATA_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # Optional backup LLM -- if this secret isn't set, the pipeline
-          # runs on Gemini alone.
+          # Backup LLM for discovery.py AND the only contact-search
+          # fallback once Crustdata's credits run out -- if this secret
+          # isn't set, the pipeline still runs, but with no fallback for
+          # either.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GITHUB_ACTIONS: "true"
           # Python buffers stdout when it isn't a real terminal, which is
