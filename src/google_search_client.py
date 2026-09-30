@@ -94,14 +94,27 @@ class GoogleSearchClient:
                 if resp.status_code in QUOTA_EXCEEDED_STATUS_CODES:
                     raise GoogleSearchQuotaExceeded(
                         f"Google Custom Search quota/access error (status {resp.status_code}): "
-                        f"{resp.text[:300]}"
+                        f"{resp.text[:500]}"
+                    )
+                if resp.status_code == 400:
+                    # A 400 is a malformed request (bad key, bad cx, bad
+                    # param) -- retrying the identical request wastes
+                    # queries against the 100/day quota for no benefit.
+                    # Fail fast with Google's actual error body so this is
+                    # diagnosable instead of a bare "Bad Request".
+                    raise RuntimeError(
+                        f"Google Custom Search 400 Bad Request for query '{query}': {resp.text[:500]}"
                     )
                 resp.raise_for_status()
                 items = resp.json().get("items", []) or []
                 self.results_returned += len(items)
                 return items
+            except (GoogleSearchQuotaExceeded, RuntimeError):
+                raise
             except httpx.HTTPError as exc:
                 last_error = exc
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                    last_error = RuntimeError(f"{exc} -- body: {exc.response.text[:500]}")
                 time.sleep(BACKOFF_BASE_SECONDS * (2 ** attempt))
 
         raise RuntimeError(f"Google Custom Search failed for query '{query}': {last_error}")
