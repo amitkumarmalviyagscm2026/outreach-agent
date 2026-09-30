@@ -1,16 +1,15 @@
-"""Contact research: Crustdata first, Google Custom Search as a free
+"""Contact research: Crustdata first, Gemini Search grounding as a free
 fallback once Crustdata's credit balance is exhausted.
 
 Crustdata stays the default because it's structured, filtered, and cheap
-(~30 credits for a full 100-company run) -- Google Custom Search is a
+(~30 credits for a full 100-company run) -- the Gemini fallback is a
 lower-confidence, free backstop, not a replacement. See
-google_search_client.py for why its results need a human's eye before
-trusting them the way a Crustdata match is trusted.
+gemini_contact_search.py for how it works and what it trades off.
 
 Once Crustdata signals an exhausted balance (crustdata_client.CrustdataExhausted),
 it's skipped for the REST OF THE RUN -- credits don't come back mid-run,
 so retrying it on every subsequent company would be pure waste. Every
-contact found after that point is tagged source="google_search" so it's
+contact found after that point is tagged source="gemini_search" so it's
 visible in the output, not silently presented as if it were a normal
 Crustdata match.
 """
@@ -24,75 +23,60 @@ from src.crustdata_client import (
     CrustdataClient,
     CrustdataExhausted,
 )
-from src.google_search_client import GoogleSearchClient, GoogleSearchQuotaExceeded
+from src.gemini_contact_search import find_contact as gemini_find_contact
 
 
 class ContactSearchService:
-    def __init__(self, crustdata_api_key: str, google_api_key: str | None, google_cx: str | None):
+    def __init__(self, crustdata_api_key: str, gemini_api_key: str, gemini_models: list[str]):
         self._crustdata = CrustdataClient(crustdata_api_key)
-        self._google: GoogleSearchClient | None = None
-        if google_api_key and google_cx:
-            self._google = GoogleSearchClient(google_api_key, google_cx)
+        self._gemini_api_key = gemini_api_key
+        self._gemini_models = gemini_models
 
         self._crustdata_exhausted = False
-        self._google_quota_exceeded = False
+        self._gemini_search_calls = 0
+        self._gemini_search_found = 0
 
     def close(self) -> None:
         self._crustdata.close()
-        if self._google:
-            self._google.close()
 
     @property
     def crustdata_counter(self):
         return self._crustdata.counter
 
-    def _google_find(
-        self, role: str, company_name: str, keywords: list[str], exclude: list[str] | None = None
-    ) -> Contact:
-        if self._google is None or self._google_quota_exceeded:
-            return Contact(role=role)
-        try:
-            return self._google.find_contact(role, company_name, keywords, exclude)
-        except GoogleSearchQuotaExceeded as exc:
-            print(f"  {exc}\n  Google Search quota used up for today -- no fallback for the rest of this run")
-            self._google_quota_exceeded = True
-            return Contact(role=role)
-        except RuntimeError as exc:
-            print(f"  Google Search fallback failed for {role}: {exc}")
-            return Contact(role=role)
+    def _gemini_find(self, role: str, company_name: str, keywords: list[str], exclude: list[str] | None = None) -> Contact:
+        self._gemini_search_calls += 1
+        contact = gemini_find_contact(
+            role, company_name, keywords, self._gemini_api_key, self._gemini_models, exclude
+        )
+        if contact.name:
+            self._gemini_search_found += 1
+        return contact
 
     def get_two_contacts(self, company_name: str) -> tuple[Contact, Contact]:
         if self._crustdata_exhausted:
-            hr = self._google_find("hr_ta", company_name, HR_TA_TITLE_KEYWORDS)
-            ops = self._google_find("ops_scm", company_name, OPS_SCM_TITLE_KEYWORDS, OPS_SCM_EXCLUDE)
+            hr = self._gemini_find("hr_ta", company_name, HR_TA_TITLE_KEYWORDS)
+            ops = self._gemini_find("ops_scm", company_name, OPS_SCM_TITLE_KEYWORDS, OPS_SCM_EXCLUDE)
             return hr, ops
 
         try:
             return self._crustdata.get_two_contacts(company_name)
         except CrustdataExhausted as exc:
             self._crustdata_exhausted = True
-            if self._google is not None:
-                print(
-                    f"  {exc}\n  Switching to the free Google Search fallback for the "
-                    "rest of this run (lower confidence -- verify these contacts)."
-                )
-            else:
-                print(
-                    f"  {exc}\n  No GOOGLE_SEARCH_API_KEY configured, so there's no fallback -- "
-                    "remaining companies will have no contacts found."
-                )
+            print(
+                f"  {exc}\n  Switching to the free Gemini Search fallback for the "
+                "rest of this run (lower confidence -- verify these contacts)."
+            )
             # This company's own search still gets a chance via the fallback,
             # rather than leaving it blank just because it was first in line.
-            hr = self._google_find("hr_ta", company_name, HR_TA_TITLE_KEYWORDS)
-            ops = self._google_find("ops_scm", company_name, OPS_SCM_TITLE_KEYWORDS, OPS_SCM_EXCLUDE)
+            hr = self._gemini_find("hr_ta", company_name, HR_TA_TITLE_KEYWORDS)
+            ops = self._gemini_find("ops_scm", company_name, OPS_SCM_TITLE_KEYWORDS, OPS_SCM_EXCLUDE)
             return hr, ops
 
     def summary(self) -> str:
         parts = [self._crustdata.counter.summary()]
-        if self._google is not None:
+        if self._gemini_search_calls:
             parts.append(
-                f"Google Search fallback: {self._google.queries_made} queries, "
-                f"{self._google.results_returned} results "
-                f"(used: {self._crustdata_exhausted})"
+                f"Gemini Search fallback: {self._gemini_search_calls} calls, "
+                f"{self._gemini_search_found} contacts found"
             )
         return " | ".join(parts)

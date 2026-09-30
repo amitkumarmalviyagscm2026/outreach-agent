@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 
-from src.config import Secrets, clamp_company_count
+from src.config import GEMINI_MODELS, Secrets, clamp_company_count
 from src.contact_search import ContactSearchService
 from src.crustdata_client import CANDIDATES_PER_SEARCH, CREDITS_PER_RESULT, Contact
 from src.discovery import Company, rank_companies
@@ -74,9 +74,7 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
         f"(up to ~{projected_credits:.2f} credits, since person/search bills per result returned)"
     )
 
-    contacts_service = ContactSearchService(
-        secrets.crustdata_api_key, secrets.google_search_api_key, secrets.google_search_cx
-    )
+    contacts_service = ContactSearchService(secrets.crustdata_api_key, secrets.gemini_api_key, GEMINI_MODELS)
     rows: list[OutputRow] = []
     qa_flagged = 0
     start_time = time.monotonic()
@@ -104,8 +102,8 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
             for contact, flag in ((hr_contact, hr_flag), (ops_contact, ops_flag)):
                 if flag:
                     row_flags.append(flag)
-                if contact.name and contact.source == "google_search":
-                    row_flags.append(f"{contact.role}: sourced via free Google Search fallback -- verify")
+                if contact.name and contact.source == "gemini_search":
+                    row_flags.append(f"{contact.role}: sourced via free Gemini Search fallback -- verify")
 
             if row_flags:
                 qa_flagged += 1

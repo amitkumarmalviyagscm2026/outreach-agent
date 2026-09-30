@@ -98,6 +98,33 @@ actually *call* -- see above):
   Select-Object name
 ```
 
+## Troubleshooting: the Gemini Search contact fallback
+
+This is the one piece of the pipeline that hasn't been run against the
+live API as of this writing -- see `src/gemini_contact_search.py`'s
+docstring for the full reasoning. If a run reaches the fallback (its log
+line starts with "Switching to the free Gemini Search fallback") and every
+contact comes back blank, check the log for one of these:
+
+- **`unparseable response`** -- the model didn't return valid JSON (or
+  didn't wrap it the way `_parse_json_loosely` expects). The log prints
+  the first 300 characters of what it actually said; if it's consistently
+  ignoring the "respond with only a JSON object" instruction, the prompt
+  in `gemini_contact_search.py`'s `SYSTEM_PROMPT` needs tightening.
+- **`claimed URL not found among cited sources`** -- the model reported a
+  LinkedIn URL that didn't match any of Gemini's actual search citations,
+  so it was correctly discarded rather than trusted blindly. The log
+  prints the citation URLs it actually got back. If these are
+  consistently Google redirect links (e.g.
+  `vertexaisearch.cloud.google.com/...`) rather than direct `linkedin.com`
+  URLs, the exact-match comparison in `_url_is_verified()` needs to
+  resolve redirects, or relax to "a citation exists at all" instead of an
+  exact match -- tell Claude this specific symptom if you hit it.
+- **A `RuntimeError` about the request itself** -- likely means grounding
+  needs something `GEMINI_API_KEY` doesn't have (e.g. a billing-enabled
+  project), contradicting the "same free key" assumption this was built
+  on. Paste the exact error and this needs re-investigating from there.
+
 ## Setup
 
 1. Create the repo and add secrets (PowerShell):
@@ -131,27 +158,35 @@ actually *call* -- see above):
    - Groq free tier: 30 requests/minute, 1,000/day, 8K tokens/minute per
      model (`openai/gpt-oss-120b`, then `openai/gpt-oss-20b`).
 
-   **Optional: a free fallback for when Crustdata's credit balance runs
-   out.** Crustdata itself has no free tier — this doesn't replace it, it
-   just keeps a run going with lower-confidence contacts (flagged as
-   `sourced via free Google Search fallback -- verify` in the output)
-   instead of leaving every remaining company blank. Two secrets, both
-   from Google, both free:
+   **The fallback for when Crustdata's credit balance runs out needs no
+   extra secret.** Crustdata itself has no free tier — this doesn't
+   replace it, it just keeps a run going with lower-confidence contacts
+   (flagged as `sourced via free Gemini Search fallback -- verify` in the
+   output) instead of leaving every remaining company blank.
 
-   1. Go to [console.cloud.google.com](https://console.cloud.google.com),
-      create a project (or use an existing one), then enable the
-      **Custom Search API** for it, then create an **API key** under
-      **APIs & Services → Credentials**. This is `GOOGLE_SEARCH_API_KEY`.
-   2. Go to [programmablesearchengine.google.com](https://programmablesearchengine.google.com/controlpanel/create),
-      create a new search engine with **"Search the entire web"** turned
-      on, then copy its **Search engine ID** from the control panel. This
-      is `GOOGLE_SEARCH_CX`.
-   3. `gh secret set GOOGLE_SEARCH_API_KEY` and `gh secret set GOOGLE_SEARCH_CX`.
+   *(History: an earlier version of this used Google's standalone Custom
+   Search JSON API, which turned out to be closed to new Google Cloud
+   accounts entirely — a real error confirmed against the live API, not a
+   setup mistake. It's been replaced with Gemini's own Google Search
+   grounding feature instead, which needs nothing beyond the
+   `GEMINI_API_KEY` already set up above.)*
 
-   Free tier: 100 searches/day, shared across whatever else uses that
-   Google Cloud project — no credit card, no ongoing cost. Without both
-   secrets set, a Crustdata balance running out just means the rest of
-   that run finds no contacts, same as before.
+   How it works (`src/gemini_contact_search.py`): once Crustdata is
+   exhausted, each remaining company gets up to 2 Gemini calls (HR/TA,
+   Ops/SCM) with Google Search grounding enabled, asking the model to
+   search for and cite a real LinkedIn profile. The model's claimed URL
+   is **never trusted on its word** — it's cross-checked against the
+   actual search citations Gemini returned, and discarded (left blank)
+   if it doesn't match a real citation. Free tier: 5,000 grounded search
+   requests/month for the Gemini 3.x family, shared across whatever else
+   uses that key.
+
+   ⚠️ **This fallback has not been exercised against the live API as of
+   this writing.** It's built against Gemini's documented request/response
+   shape, but today's session hit three separate cases where a service's
+   real behavior didn't match its docs. Run a real `--count 1 --mode test`
+   and read the log before trusting it in a `full` run — see
+   Troubleshooting below if it doesn't behave as expected.
 
 2. Local dev (optional but recommended before pushing):
    ```powershell
@@ -202,7 +237,7 @@ python run.py --sector "Pharma" --count 1 --mode test
 | Stage | File | What it does |
 |---|---|---|
 | 1. Discover | `src/discovery.py` | One LLM call (Gemini, Groq as backup) **for the whole run**: sector → ranked top-N company names (JSON, not free text) |
-| 2. Research | `src/contact_search.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword. Falls back to Google Custom Search for the rest of the run once Crustdata's balance is exhausted (optional, free, lower confidence — see Setup) |
+| 2. Research | `src/contact_search.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword. Falls back to Gemini Search grounding for the rest of the run once Crustdata's balance is exhausted (free, no extra secret, lower confidence — see Setup) |
 | 3. Draft | `src/drafting.py` + `src/templates.py` | **No LLM call.** A fixed template per role, filled in with the contact's name, honorific, title, and company — see below |
 | 4. Validate | `src/qa.py` | Length, combined-salutation, placeholder, malformed-link, and orphan-message checks; failures get a `QA_FLAG`, never silently dropped |
 | 5. Write | `src/workbook.py` | `.xlsx` with real clickable LinkedIn hyperlinks (not bare URLs), frozen header row |
@@ -255,10 +290,10 @@ section above still applies to that one call, just far less often.
 - Contact scope is fixed at exactly 2 roles per company (HR/TA, Ops/SCM),
   not the full CEO/COO/CHRO/Plant-Head/Campus-Recruiter list, specifically
   to keep per-run cost predictable.
-- If Crustdata's balance runs out mid-run and `GOOGLE_SEARCH_API_KEY` +
-  `GOOGLE_SEARCH_CX` are set, the rest of the run switches to that free
-  fallback rather than stopping — see Setup for what this trades off
-  (lower-confidence contacts, flagged in the output).
+- If Crustdata's balance runs out mid-run, the rest of the run switches
+  to the free Gemini Search fallback rather than stopping — see Setup
+  for what this trades off (lower-confidence contacts, flagged in the
+  output).
 
 ## What it deliberately won't do
 
