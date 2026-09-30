@@ -27,10 +27,14 @@ from src.gemini_contact_search import find_contact as gemini_find_contact
 
 
 class ContactSearchService:
-    def __init__(self, crustdata_api_key: str, gemini_api_key: str, gemini_models: list[str]):
+    def __init__(self, crustdata_api_key: str, gemini_api_key: str, gemini_grounding_models: list[str]):
+        # gemini_grounding_models must be Gemini 2.5-family model(s) -- see
+        # config.py's GEMINI_GROUNDING_MODELS comment for why a 3.x model
+        # (used elsewhere in this pipeline) gets no free-tier grounding at
+        # all and will 429 on every single grounded call, not just under load.
         self._crustdata = CrustdataClient(crustdata_api_key)
         self._gemini_api_key = gemini_api_key
-        self._gemini_models = gemini_models
+        self._gemini_models = gemini_grounding_models
 
         self._crustdata_exhausted = False
         self._gemini_search_calls = 0

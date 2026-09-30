@@ -100,11 +100,28 @@ actually *call* -- see above):
 
 ## Troubleshooting: the Gemini Search contact fallback
 
-This is the one piece of the pipeline that hasn't been run against the
-live API as of this writing -- see `src/gemini_contact_search.py`'s
-docstring for the full reasoning. If a run reaches the fallback (its log
-line starts with "Switching to the free Gemini Search fallback") and every
-contact comes back blank, check the log for one of these:
+**Live-tested 2026-09-30 and found broken, then fixed** -- a real run hit a
+sustained 429 on every single grounded call, no matter the backoff. Root
+cause, confirmed against Google's own pricing page: `gemini-flash-lite-latest`
+resolves to a **Gemini 3.x** model, and Gemini 3.x gets **no free-tier
+Google Search grounding at all** -- it's a paid-only feature there (5,000
+requests/month once billing is enabled). Only **Gemini 2.5 Flash** and
+**Gemini 2.5 Flash-Lite** get free grounding (500 requests/day, shared
+between the two). The fallback now calls `gemini-2.5-flash-lite`
+specifically for grounded search (`config.py`'s `GEMINI_GROUNDING_MODELS`),
+kept separate from `GEMINI_MODELS` (used for discovery.py's plain,
+non-grounded calls, where the 3.x model is fine).
+
+Groq was considered as a replacement for Gemini here too, since it's a
+separate quota entirely -- ruled out because Groq's only web-search-capable
+models (`groq/compound`, `groq/compound-beta`) were decommissioned on
+2026-09-21 (confirmed via Groq's own docs). Groq's remaining chat models
+have no browsing tool on the free tier, so they can't look up a real,
+verifiable LinkedIn profile -- only Gemini's 2.5-family grounding can, for
+this pipeline's free-tier constraints.
+
+If a run reaches the fallback (its log line starts with "Switching to the
+free Gemini Search fallback") and it's still misbehaving, check the log for:
 
 - **`unparseable response`** -- the model didn't return valid JSON (or
   didn't wrap it the way `_parse_json_loosely` expects). The log prints
@@ -120,10 +137,10 @@ contact comes back blank, check the log for one of these:
   URLs, the exact-match comparison in `_url_is_verified()` needs to
   resolve redirects, or relax to "a citation exists at all" instead of an
   exact match -- tell Claude this specific symptom if you hit it.
-- **A `RuntimeError` about the request itself** -- likely means grounding
-  needs something `GEMINI_API_KEY` doesn't have (e.g. a billing-enabled
-  project), contradicting the "same free key" assumption this was built
-  on. Paste the exact error and this needs re-investigating from there.
+- **429s persist even on `gemini-2.5-flash-lite`** -- check the AI Studio
+  Rate Limit dashboard for its actual current RPM; the 500 RPD free pool is
+  shared with `gemini-2.5-flash`, so heavy use of either eats the other's
+  headroom.
 
 ## Setup
 
@@ -177,16 +194,10 @@ contact comes back blank, check the log for one of these:
    search for and cite a real LinkedIn profile. The model's claimed URL
    is **never trusted on its word** — it's cross-checked against the
    actual search citations Gemini returned, and discarded (left blank)
-   if it doesn't match a real citation. Free tier: 5,000 grounded search
-   requests/month for the Gemini 3.x family, shared across whatever else
-   uses that key.
-
-   ⚠️ **This fallback has not been exercised against the live API as of
-   this writing.** It's built against Gemini's documented request/response
-   shape, but today's session hit three separate cases where a service's
-   real behavior didn't match its docs. Run a real `--count 1 --mode test`
-   and read the log before trusting it in a `full` run — see
-   Troubleshooting below if it doesn't behave as expected.
+   if it doesn't match a real citation. Free tier: 500 grounded search
+   requests/day, but only on Gemini 2.5 Flash / 2.5 Flash-Lite — see
+   Troubleshooting below for why this fallback deliberately uses a
+   different model than the rest of the pipeline.
 
 2. Local dev (optional but recommended before pushing):
    ```powershell

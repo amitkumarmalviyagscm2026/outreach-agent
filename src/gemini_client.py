@@ -226,10 +226,13 @@ def generate_grounded_text(
     wants JSON out of it must parse it tolerantly (see
     gemini_contact_search.py) rather than relying on schema enforcement.
 
-    Free tier: 5,000 grounded search requests/month for the Gemini 3.x
-    family (confirmed at ai.google.dev/gemini-api/docs/pricing), shared
-    across the whole project -- the same GEMINI_API_KEY already used for
-    discovery.py, no separate signup or secret needed.
+    Free tier: 500 grounded search requests/day, shared between the
+    Gemini 2.5 Flash and Gemini 2.5 Flash-Lite models (confirmed at
+    ai.google.dev/gemini-api/docs/pricing) -- the same GEMINI_API_KEY
+    already used for discovery.py, no separate signup or secret needed.
+    Gemini 3.x models get NO free-tier grounding at all (paid-only, 5,000
+    requests/month), which is why `models` here must be a 2.5-family
+    model (see config.py's GEMINI_GROUNDING_MODELS), not GEMINI_MODELS.
     """
     body: dict = {
         "contents": [{"parts": [{"text": prompt}]}],

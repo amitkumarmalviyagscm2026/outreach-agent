@@ -4,19 +4,24 @@ fallback once Crustdata's credit balance is exhausted.
 Replaces an earlier attempt built against the standalone Custom Search
 JSON API, which turned out to be closed to new Google Cloud accounts
 entirely (confirmed via real error responses, not assumption -- see git
-log). Grounding is a different Gemini API feature: 5,000 free grounded
-search requests/month for the Gemini 3.x family (confirmed at
-ai.google.dev/gemini-api/docs/pricing), on the SAME GEMINI_API_KEY this
+log). Grounding is a different Gemini API feature: 500 free grounded
+search requests/day, but ONLY on Gemini 2.5 Flash / 2.5 Flash-Lite --
+confirmed at ai.google.dev/gemini-api/docs/pricing on 2026-09-30, after a
+live test run showed every grounded call 429-ing regardless of backoff.
+Gemini 3.x models (what the rest of this pipeline uses) get NO free-tier
+grounding at all -- it's paid-only there, which is what the 429s actually
+were. This module must be called with a 2.5-family model list (see
+config.py's GEMINI_GROUNDING_MODELS), on the SAME GEMINI_API_KEY this
 pipeline already uses for discovery.py. No new signup, no new secret.
 
-*** THIS HAS NOT BEEN TESTED AGAINST THE LIVE API. *** Everything below is
-built against Gemini's documented request/response shape, confirmed as
-precisely as WebFetch/WebSearch summaries allow -- but today's session hit
-three separate cases where a service's real behavior didn't match its own
-docs (Google Custom Search's undocumented new-customer closure, an
-undocumented Crustdata error shape, Apollo's undocumented lack of a
-LinkedIn URL field). Run a real `--count 1 --mode test` and read the log
-before trusting this in a `full` run.
+Groq was also considered as an alternative when the Gemini 429s first
+showed up (Groq is a separate service/quota from Gemini). Ruled out: Groq's
+only web-search-capable models (`groq/compound`, `groq/compound-beta`)
+were decommissioned on 2026-09-21 -- confirmed live via Groq's own docs.
+Groq's remaining models (openai/gpt-oss-*, llama-3.3-*, used in llm.py for
+discovery.py's backup) have no browsing/search tool on the free tier at
+all, so they cannot look up a real, verifiable contact -- only Gemini's
+2.5-family grounding can.
 
 Design, and why:
   - Can't reuse gemini_client.generate_json()'s strict response_schema

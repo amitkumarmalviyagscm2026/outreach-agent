@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 
-from src.config import GEMINI_MODELS, Secrets, clamp_company_count
+from src.config import GEMINI_GROUNDING_MODELS, GEMINI_MODELS, Secrets, clamp_company_count
 from src.contact_search import ContactSearchService
 from src.crustdata_client import CANDIDATES_PER_SEARCH, CREDITS_PER_RESULT, Contact
 from src.discovery import Company, rank_companies
@@ -74,7 +74,9 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
         f"(up to ~{projected_credits:.2f} credits, since person/search bills per result returned)"
     )
 
-    contacts_service = ContactSearchService(secrets.crustdata_api_key, secrets.gemini_api_key, GEMINI_MODELS)
+    contacts_service = ContactSearchService(
+        secrets.crustdata_api_key, secrets.gemini_api_key, GEMINI_GROUNDING_MODELS
+    )
     rows: list[OutputRow] = []
     qa_flagged = 0
     start_time = time.monotonic()

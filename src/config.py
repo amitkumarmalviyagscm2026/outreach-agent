@@ -58,6 +58,26 @@ FULL_MODE_MAX_COMPANIES = 100
 # adding it here -- don't repeat the mistake above.
 GEMINI_MODELS = ["gemini-flash-lite-latest"]
 
+# Models used ONLY for the grounded (Google Search) contact-search fallback
+# in gemini_contact_search.py -- deliberately NOT the same list as
+# GEMINI_MODELS above. Confirmed on Google's own pricing page
+# (ai.google.dev/gemini-api/docs/pricing) on 2026-09-30:
+#   - Gemini 3.x models (which "gemini-flash-lite-latest" resolves to --
+#     Gemini 3.5 Flash Lite) get NO free-tier grounding at all ("Not
+#     available"); it's paid-only, 5,000 requests/MONTH once billing is on.
+#     This is why every live grounded call was hitting a 429 that no
+#     backoff could ever clear -- it wasn't rate limiting, it was a
+#     free-tier account calling a feature that free tier doesn't grant on
+#     this model. An earlier version of this file/README wrongly stated
+#     "5,000 free grounded searches/month" for the fallback -- that number
+#     is real, but it's the PAID tier's allowance, not free's.
+#   - Gemini 2.5 Flash and Gemini 2.5 Flash-Lite DO get free grounding:
+#     500 RPD, shared between the two models, at no charge.
+# So the grounding fallback must use a 2.5-family model, not the 3.x model
+# used elsewhere in this pipeline. Verify RPM on the AI Studio Rate Limit
+# dashboard before changing this.
+GEMINI_GROUNDING_MODELS = ["gemini-2.5-flash-lite"]
+
 
 @dataclass(frozen=True)
 class Secrets:
@@ -100,7 +120,7 @@ def load_secrets() -> Secrets:
     # gemini_contact_search.py) needs no extra secret -- it's Gemini's own
     # Google Search grounding feature, on the same GEMINI_API_KEY above.
     # Kicks in only once Crustdata's credit balance is exhausted.
-    print("Contact fallback: Gemini Search grounding -- free, 5,000 grounded searches/month, kicks in if Crustdata runs out")
+    print("Contact fallback: Gemini Search grounding -- free, 500 grounded searches/day, kicks in if Crustdata runs out")
 
     return Secrets(crustdata_api_key=crustdata_key, gemini_api_key=gemini_key, groq_api_key=groq_key)
 
