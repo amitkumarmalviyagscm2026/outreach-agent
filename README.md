@@ -139,11 +139,24 @@ live run surfaced and fixed:
   next call fired -- it 429'd immediately regardless of which company it
   was for. Fixed with `BROWSER_SEARCH_PACING_SECONDS` (65s, its own
   constant separate from the 10s used elsewhere) so a call mostly succeeds
-  on the first try instead of retrying into a wall. Even with this fix,
-  the fallback is still inherently slow (a company takes roughly a minute
-  or two per role found) and not viable for dozens of companies in one
-  run; treat it as a backstop for a handful of stragglers once Crustdata's
-  credits run out, not a bulk substitute for them.
+  on the first try instead of retrying into a wall.
+
+  **Even with that fix, a full 10-company run (Retail sector,
+  2026-09-30) took 52 minutes and only found 6 of 20 possible contacts
+  (30%).** Groq's `browser_search` clearly has a real-world budget much
+  tighter than the general chat-completion 8K-tokens/minute figure
+  suggests -- no pacing number fixes that, it's a platform ceiling. Do
+  not tune `BROWSER_SEARCH_PACING_SECONDS` further expecting a fix; at
+  this rate a 100-company run (up to 200 fallback calls) would need
+  8+ hours, far past the 90-minute job timeout. **Decision made
+  2026-09-30: treat this fallback strictly as a backstop for a handful of
+  stragglers, not a bulk substitute for Crustdata credits.** The actual
+  fix for "Crustdata keeps running out" is buying more Crustdata credits
+  (app.crustdata.com/billing/credits) -- it's the only source in this
+  pipeline that's fast, reliable, and structured at scale. Enabling
+  Gemini billing for real (non-free-tier) grounding was considered as an
+  alternative and rejected for now, but remains an option if Crustdata
+  costs become a problem later.
 - **Two unrelated bugs the real output caught**, both fixed the same day:
   `infer_honorific()`'s curated name lists were missing common names (a
   found contact named "Rishi" or "Nishit" got no honorific at all,
