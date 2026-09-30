@@ -65,6 +65,20 @@ MAX_COMPLETION_TOKENS_CAP = 7000
 # successful calls keeps under that with margin.
 PACING_SECONDS_AFTER_SUCCESS = 10.0
 
+# browser_search needs its own, much longer pacing than
+# PACING_SECONDS_AFTER_SUCCESS. A real run showed a SINGLE browser_search
+# call (search query + fetched page content + reasoning + answer) using
+# close to or all of the free tier's 8K-tokens/minute budget by itself --
+# so the very next call, even for a different company, hit the same
+# still-full 1-minute window and 429'd immediately, on BOTH models (each
+# has its own but equally small budget). 10s of pacing wasn't remotely
+# enough to let that window clear; the run was wasting up to 180s per
+# company retrying into a wall (2 attempts x 45s x 2 models) instead of
+# just waiting long enough upfront to succeed on the first try. 65s (a
+# little over the 60s window, for margin) trades a slower fallback for
+# one that mostly succeeds without retries.
+BROWSER_SEARCH_PACING_SECONDS = 65.0
+
 
 def to_strict_json_schema(schema: dict) -> dict:
     """Converts the Gemini-style schema used across this codebase
@@ -255,13 +269,12 @@ def chat_with_browser_search(
     than relying on schema enforcement, same approach already used for
     Gemini's grounding in gemini_client.py.
 
-    Uses fewer retries and a capped wait per attempt than generate_json --
-    a live run showed a single browser_search call triggering a 455s
-    server-suggested retry-after (heavy token usage from search results
-    against the free tier's 8K tokens/minute budget). Honoring that fully
-    would make a fallback-heavy run take hours; BROWSER_SEARCH_MAX_WAIT_SECONDS
-    caps each wait so a call either succeeds quickly or gives up and the
-    caller gets a blank Contact, rather than blocking the whole pipeline.
+    Uses fewer retries, a capped wait per attempt, and much longer pacing
+    after success than generate_json -- see BROWSER_SEARCH_MAX_WAIT_SECONDS
+    and BROWSER_SEARCH_PACING_SECONDS above for what two separate live
+    runs showed (a 455s server-suggested retry-after on one call, then
+    sustained 429s on every subsequent call once pacing was too short to
+    let the previous call's token usage clear the 1-minute window).
     """
     messages = []
     if system_instruction:
@@ -284,7 +297,7 @@ def chat_with_browser_search(
             max_wait_seconds=BROWSER_SEARCH_MAX_WAIT_SECONDS,
         )
         if data is not None:
-            time.sleep(PACING_SECONDS_AFTER_SUCCESS)
+            time.sleep(BROWSER_SEARCH_PACING_SECONDS)
             message = data["choices"][0]["message"]
             text = message.get("content") or ""
             sources = _extract_urls(message.get("executed_tools"))

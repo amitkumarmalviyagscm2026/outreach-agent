@@ -126,19 +126,24 @@ there's no contact-search fallback at all, only Crustdata.
 both an HR/TA and an Ops/SCM contact via citation. Two things the first
 live run surfaced and fixed:
 
-- **Speed.** A single fallback company took 13m49s -- `browser_search`
-  pulls a lot of web content into context, and one call alone triggered a
-  455-second server-suggested `retry-after` against the free tier's 8K
-  tokens/minute budget. Honoring that in full would make a fallback-heavy
-  run (e.g. Crustdata exhausted early in a 100-company run) take many
-  hours, well past the 90-minute job timeout. `groq_client.py` now caps
-  each retry wait at `BROWSER_SEARCH_MAX_WAIT_SECONDS` (45s) with fewer
-  retries, trading a lower per-call success rate under heavy load for a
-  run that actually finishes -- a call that still fails just returns a
-  blank Contact rather than blocking the whole run. This still doesn't
-  make the fallback viable for dozens of companies in one run; treat it as
-  a backstop for a handful of stragglers, not a bulk substitute for
-  Crustdata credits.
+- **Speed -- two rounds of fixes.** A single fallback company first took
+  13m49s: `browser_search` pulls a lot of web content into context, and
+  one call alone triggered a 455-second server-suggested `retry-after`
+  against the free tier's 8K tokens/minute budget. Capped each retry wait
+  at `BROWSER_SEARCH_MAX_WAIT_SECONDS` (45s) with fewer retries -- but the
+  very next real run then showed sustained 429s on *every* call after the
+  first, on both models. Root cause: a single browser_search call can use
+  close to or all of the entire per-minute token budget by itself, so the
+  original 10-second pacing between calls (fine for the lighter,
+  non-search Groq calls) left the 1-minute window still full when the
+  next call fired -- it 429'd immediately regardless of which company it
+  was for. Fixed with `BROWSER_SEARCH_PACING_SECONDS` (65s, its own
+  constant separate from the 10s used elsewhere) so a call mostly succeeds
+  on the first try instead of retrying into a wall. Even with this fix,
+  the fallback is still inherently slow (a company takes roughly a minute
+  or two per role found) and not viable for dozens of companies in one
+  run; treat it as a backstop for a handful of stragglers once Crustdata's
+  credits run out, not a bulk substitute for them.
 - **Two unrelated bugs the real output caught**, both fixed the same day:
   `infer_honorific()`'s curated name lists were missing common names (a
   found contact named "Rishi" or "Nishit" got no honorific at all,
