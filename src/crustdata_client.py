@@ -105,6 +105,22 @@ CONTACT_FIELDS = [
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 2.0
 
+# Best-effort signal for "the account is out of credits" rather than a
+# transient failure. Not confirmed against Crustdata's docs (they don't
+# document this error shape) -- if a real exhausted-balance response
+# doesn't match this, contact_search.py just treats it as an ordinary
+# failure and keeps retrying Crustdata instead of falling back.
+_EXHAUSTED_BALANCE_STATUS_CODES = {402}  # Payment Required
+_EXHAUSTED_BALANCE_KEYWORDS = ("credit", "balance", "insufficient", "exhausted")
+
+
+def _looks_like_exhausted_balance(resp: httpx.Response) -> bool:
+    if resp.status_code in _EXHAUSTED_BALANCE_STATUS_CODES:
+        return True
+    if resp.status_code in (400, 403):
+        return any(kw in resp.text.lower() for kw in _EXHAUSTED_BALANCE_KEYWORDS)
+    return False
+
 
 def _core_company_name(name: str) -> str:
     words = name.split()
@@ -156,6 +172,15 @@ class Contact:
     name: str | None = None
     title: str | None = None
     linkedin_url: str | None = None
+    source: str = "crustdata"  # "crustdata" or "google_search" -- see contact_search.py
+
+
+class CrustdataExhausted(RuntimeError):
+    """Raised when a request looks like it failed because the account's
+    credit balance ran out, not a transient error. Detection is
+    best-effort (see _looks_like_exhausted_balance below) since Crustdata's
+    docs don't spell out the exact error shape for this case -- confirm
+    against a real response if this ever mis-fires."""
 
 
 @dataclass
@@ -286,6 +311,10 @@ class CrustdataClient:
             try:
                 resp = self._client.post(PERSON_SEARCH_PATH, json=body)
                 self.counter.requests_made += 1
+                if _looks_like_exhausted_balance(resp):
+                    raise CrustdataExhausted(
+                        f"Crustdata balance appears exhausted (status {resp.status_code}): {resp.text[:300]}"
+                    )
                 if resp.status_code == 429:
                     wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
                     print(
@@ -307,6 +336,8 @@ class CrustdataClient:
     def _find(self, role: str, company_name: str, keywords: list[str], exclude: list[str]) -> Contact:
         try:
             profiles = self._search_people(company_name, keywords)
+        except CrustdataExhausted:
+            raise  # let contact_search.py catch this specifically and switch to the fallback
         except RuntimeError as exc:
             print(f"  {role} search failed: {exc}")
             return Contact(role=role)

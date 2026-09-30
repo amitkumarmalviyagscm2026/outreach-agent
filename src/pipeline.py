@@ -18,7 +18,8 @@ from __future__ import annotations
 import time
 
 from src.config import Secrets, clamp_company_count
-from src.crustdata_client import CANDIDATES_PER_SEARCH, CREDITS_PER_RESULT, Contact, CrustdataClient
+from src.contact_search import ContactSearchService
+from src.crustdata_client import CANDIDATES_PER_SEARCH, CREDITS_PER_RESULT, Contact
 from src.discovery import Company, rank_companies
 from src.drafting import DraftedMessages, draft_company_messages
 from src import llm
@@ -73,7 +74,9 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
         f"(up to ~{projected_credits:.2f} credits, since person/search bills per result returned)"
     )
 
-    crustdata = CrustdataClient(secrets.crustdata_api_key)
+    contacts_service = ContactSearchService(
+        secrets.crustdata_api_key, secrets.google_search_api_key, secrets.google_search_cx
+    )
     rows: list[OutputRow] = []
     qa_flagged = 0
     start_time = time.monotonic()
@@ -84,7 +87,7 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
             row_flags: list[str] = []
 
             try:
-                hr_contact, ops_contact = crustdata.get_two_contacts(company.search_name)
+                hr_contact, ops_contact = contacts_service.get_two_contacts(company.search_name)
             except Exception as exc:  # noqa: BLE001 -- one company's failure must not stop the run
                 print(f"  contact research failed: {exc}")
                 hr_contact = Contact(role="hr_ta")
@@ -98,9 +101,11 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
             hr_note, hr_followup, hr_flag = _messages_and_flag(hr_contact, drafted)
             ops_note, ops_followup, ops_flag = _messages_and_flag(ops_contact, drafted)
 
-            for f in (hr_flag, ops_flag):
-                if f:
-                    row_flags.append(f)
+            for contact, flag in ((hr_contact, hr_flag), (ops_contact, ops_flag)):
+                if flag:
+                    row_flags.append(flag)
+                if contact.name and contact.source == "google_search":
+                    row_flags.append(f"{contact.role}: sourced via free Google Search fallback -- verify")
 
             if row_flags:
                 qa_flagged += 1
@@ -133,9 +138,9 @@ def run_pipeline(sector: str, requested_count: int, mode: str, secrets: Secrets)
                 f"({avg_per_company:.0f}s/company avg)"
             )
     finally:
-        crustdata.close()
+        contacts_service.close()
 
-    print(crustdata.counter.summary())
+    print(contacts_service.summary())
     print(llm.stats.summary())
     print(f"QA summary: {qa_flagged}/{len(rows)} rows flagged for review")
     print(f"Workbook written: {output_path}")

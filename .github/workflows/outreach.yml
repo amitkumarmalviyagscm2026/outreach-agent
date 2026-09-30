@@ -24,11 +24,11 @@ on:
 jobs:
   outreach:
     runs-on: ubuntu-latest
-    # A full 100-company run makes up to ~201 Gemini calls (1 discovery +
-    # up to 200 drafting) at 6s of deliberate pacing each -- roughly 20
-    # minutes of pacing alone, before actual response time, Crustdata
-    # calls, or any retry backoff. 30 minutes was too tight (see git log);
-    # 90 leaves real headroom for a run that hits some retries too.
+    # Drafting no longer calls an LLM (see templates.py), so Gemini is only
+    # called once per run now, not per company -- but Crustdata (2 calls/
+    # company) and its retries, plus a Google Search fallback if Crustdata
+    # runs out, still add up. 90 minutes leaves real headroom for a full
+    # 100-company run even with some retries.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +47,10 @@ jobs:
           # Optional backup LLM -- if this secret isn't set, the pipeline
           # runs on Gemini alone.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Optional free contact-search fallback -- kicks in only once
+          # Crustdata's credit balance runs out.
+          GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}
           GITHUB_ACTIONS: "true"
           # Python buffers stdout when it isn't a real terminal, which is
           # always true on an Actions runner -- without this, every print()

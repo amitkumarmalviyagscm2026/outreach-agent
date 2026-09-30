@@ -131,6 +131,28 @@ actually *call* -- see above):
    - Groq free tier: 30 requests/minute, 1,000/day, 8K tokens/minute per
      model (`openai/gpt-oss-120b`, then `openai/gpt-oss-20b`).
 
+   **Optional: a free fallback for when Crustdata's credit balance runs
+   out.** Crustdata itself has no free tier — this doesn't replace it, it
+   just keeps a run going with lower-confidence contacts (flagged as
+   `sourced via free Google Search fallback -- verify` in the output)
+   instead of leaving every remaining company blank. Two secrets, both
+   from Google, both free:
+
+   1. Go to [console.cloud.google.com](https://console.cloud.google.com),
+      create a project (or use an existing one), then enable the
+      **Custom Search API** for it, then create an **API key** under
+      **APIs & Services → Credentials**. This is `GOOGLE_SEARCH_API_KEY`.
+   2. Go to [programmablesearchengine.google.com](https://programmablesearchengine.google.com/controlpanel/create),
+      create a new search engine with **"Search the entire web"** turned
+      on, then copy its **Search engine ID** from the control panel. This
+      is `GOOGLE_SEARCH_CX`.
+   3. `gh secret set GOOGLE_SEARCH_API_KEY` and `gh secret set GOOGLE_SEARCH_CX`.
+
+   Free tier: 100 searches/day, shared across whatever else uses that
+   Google Cloud project — no credit card, no ongoing cost. Without both
+   secrets set, a Crustdata balance running out just means the rest of
+   that run finds no contacts, same as before.
+
 2. Local dev (optional but recommended before pushing):
    ```powershell
    python -m venv .venv
@@ -180,7 +202,7 @@ python run.py --sector "Pharma" --count 1 --mode test
 | Stage | File | What it does |
 |---|---|---|
 | 1. Discover | `src/discovery.py` | One LLM call (Gemini, Groq as backup) **for the whole run**: sector → ranked top-N company names (JSON, not free text) |
-| 2. Research | `src/crustdata_client.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword in one query each |
+| 2. Research | `src/contact_search.py` | Per company: 2 Crustdata Person Search calls (HR/TA, Ops/SCM), filtered by current employer name + title keyword. Falls back to Google Custom Search for the rest of the run once Crustdata's balance is exhausted (optional, free, lower confidence — see Setup) |
 | 3. Draft | `src/drafting.py` + `src/templates.py` | **No LLM call.** A fixed template per role, filled in with the contact's name, honorific, title, and company — see below |
 | 4. Validate | `src/qa.py` | Length, combined-salutation, placeholder, malformed-link, and orphan-message checks; failures get a `QA_FLAG`, never silently dropped |
 | 5. Write | `src/workbook.py` | `.xlsx` with real clickable LinkedIn hyperlinks (not bare URLs), frozen header row |
@@ -233,6 +255,10 @@ section above still applies to that one call, just far less often.
 - Contact scope is fixed at exactly 2 roles per company (HR/TA, Ops/SCM),
   not the full CEO/COO/CHRO/Plant-Head/Campus-Recruiter list, specifically
   to keep per-run cost predictable.
+- If Crustdata's balance runs out mid-run and `GOOGLE_SEARCH_API_KEY` +
+  `GOOGLE_SEARCH_CX` are set, the rest of the run switches to that free
+  fallback rather than stopping — see Setup for what this trades off
+  (lower-confidence contacts, flagged in the output).
 
 ## What it deliberately won't do
 

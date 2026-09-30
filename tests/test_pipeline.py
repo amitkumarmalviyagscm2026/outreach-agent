@@ -12,14 +12,14 @@ from src.crustdata_client import Contact
 from src.discovery import Company
 
 
-class FakeCrustdata:
+class FakeContactSearchService:
     searched: list[str] = []
 
-    def __init__(self, api_key):
-        self.counter = type("C", (), {"summary": lambda self: "fake summary"})()
+    def __init__(self, crustdata_key, google_key, google_cx):
+        pass
 
     def get_two_contacts(self, company_name):
-        FakeCrustdata.searched.append(company_name)
+        FakeContactSearchService.searched.append(company_name)
         if company_name == "Nobody Corp":
             return Contact(role="hr_ta"), Contact(role="ops_scm")
         return (
@@ -32,16 +32,19 @@ class FakeCrustdata:
     def close(self):
         pass
 
+    def summary(self):
+        return "fake summary"
+
 
 def test_pipeline_one_draft_call_per_company(monkeypatch, tmp_path):
-    FakeCrustdata.searched = []
+    FakeContactSearchService.searched = []
     draft_calls: list[list[str]] = []
 
     monkeypatch.setattr(pipeline, "rank_companies", lambda sector, count, key: [
         Company(name="Cipla Limited", search_name="Cipla", rationale="large pharma"),
         Company(name="Nobody Corp Pvt Ltd", search_name="Nobody Corp", rationale="x"),
     ])
-    monkeypatch.setattr(pipeline, "CrustdataClient", FakeCrustdata)
+    monkeypatch.setattr(pipeline, "ContactSearchService", FakeContactSearchService)
 
     def fake_draft(sector, company, contacts):
         from src.drafting import DraftedMessages
@@ -62,7 +65,7 @@ def test_pipeline_one_draft_call_per_company(monkeypatch, tmp_path):
     path = pipeline.run_pipeline("Pharma", 2, "test", Secrets("c", "g"))
 
     # Crustdata searched by the short search_name, not the legal name
-    assert FakeCrustdata.searched == ["Cipla", "Nobody Corp"]
+    assert FakeContactSearchService.searched == ["Cipla", "Nobody Corp"]
     # Exactly one drafting call per company, covering both roles together
     assert draft_calls == [["hr_ta", "ops_scm"], []]
 
@@ -79,7 +82,7 @@ def test_pipeline_drafting_failure_is_flagged_not_fatal(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "rank_companies", lambda sector, count, key: [
         Company(name="Cipla Limited", search_name="Cipla", rationale="large pharma"),
     ])
-    monkeypatch.setattr(pipeline, "CrustdataClient", FakeCrustdata)
+    monkeypatch.setattr(pipeline, "ContactSearchService", FakeContactSearchService)
 
     def failing_draft(*args):
         raise RuntimeError("Gemini call failed on all models: 503")

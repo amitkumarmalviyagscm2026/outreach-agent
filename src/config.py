@@ -64,6 +64,8 @@ class Secrets:
     crustdata_api_key: str
     gemini_api_key: str
     groq_api_key: str | None = None
+    google_search_api_key: str | None = None
+    google_search_cx: str | None = None
 
 
 def load_secrets() -> Secrets:
@@ -96,7 +98,22 @@ def load_secrets() -> Secrets:
     else:
         print("Backup LLM: none (set GROQ_API_KEY to enable Groq fallback)")
 
-    return Secrets(crustdata_api_key=crustdata_key, gemini_api_key=gemini_key, groq_api_key=groq_key)
+    # Optional: the free contact-search fallback (see src/contact_search.py).
+    # Kicks in only once Crustdata's credit balance is exhausted.
+    google_search_key = os.environ.get("GOOGLE_SEARCH_API_KEY", "").strip() or None
+    google_search_cx = os.environ.get("GOOGLE_SEARCH_CX", "").strip() or None
+    if google_search_key and google_search_cx:
+        print("Contact fallback: Google Custom Search configured -- free, 100 queries/day, kicks in if Crustdata runs out")
+    else:
+        print("Contact fallback: none (set GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_CX to enable it)")
+
+    return Secrets(
+        crustdata_api_key=crustdata_key,
+        gemini_api_key=gemini_key,
+        groq_api_key=groq_key,
+        google_search_api_key=google_search_key,
+        google_search_cx=google_search_cx,
+    )
 
 
 def clamp_company_count(requested: int, mode: str) -> int:
