@@ -45,6 +45,14 @@ RETRIES_PER_MODEL = 3
 BACKOFF_BASE_SECONDS = 5.0
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# chat_with_browser_search() uses these instead of RETRIES_PER_MODEL /
+# uncapped waits -- see its docstring. 2 retries per model (4 total across
+# both GROQ_MODELS) x a 45s cap bounds one contact lookup to a few minutes
+# worst case, instead of the 455s a single server-suggested retry-after
+# showed in a real run.
+BROWSER_SEARCH_RETRIES_PER_MODEL = 2
+BROWSER_SEARCH_MAX_WAIT_SECONDS = 45.0
+
 # The free tier allows 8K tokens/minute, and a single request asking for
 # more than that can be rejected outright. Callers may request more
 # (discovery asks for 16K to fit 100 companies), so cap it here. A
@@ -87,25 +95,45 @@ def _retry_after(resp: httpx.Response) -> float | None:
         return None
 
 
-def _call_one_model(model: str, body: dict, api_key: str) -> tuple[dict | None, Exception | None]:
+def _call_one_model(
+    model: str,
+    body: dict,
+    api_key: str,
+    retries: int = RETRIES_PER_MODEL,
+    max_wait_seconds: float | None = None,
+) -> tuple[dict | None, Exception | None]:
     """Returns the FULL response dict (not just parsed content), since
     generate_json() needs choices[0].message.content parsed as JSON while
     chat_with_browser_search() also needs choices[0].message.executed_tools,
-    which isn't reachable from content alone."""
+    which isn't reachable from content alone.
+
+    max_wait_seconds caps how long a single backoff sleep can be, overriding
+    Groq's own server-suggested retry-after if it's longer. A real run
+    showed browser_search's heavy token usage triggering a 455s
+    retry-after on a single call -- honoring that in full makes a 100-
+    company run (up to 200 fallback calls) take many hours, well past the
+    job's 90-minute timeout. Capping it trades a lower per-call success
+    rate under heavy load for a run that actually finishes; a call that
+    still fails after the cap just returns a blank Contact rather than
+    blocking the whole run. None (the default, used by generate_json)
+    means uncapped -- discovery.py's single call isn't volume-sensitive
+    the way the contact-search fallback is."""
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     last_error: Exception | None = None
 
     with httpx.Client(timeout=90.0) as client:
-        for attempt in range(RETRIES_PER_MODEL):
+        for attempt in range(retries):
             try:
                 resp = client.post(URL, json={**body, "model": model}, headers=headers)
 
                 if resp.status_code in RETRYABLE_STATUS_CODES:
                     server_delay = _retry_after(resp)
                     wait = (server_delay + 1.0) if server_delay is not None else BACKOFF_BASE_SECONDS * (2 ** attempt)
+                    if max_wait_seconds is not None and wait > max_wait_seconds:
+                        wait = max_wait_seconds
                     print(
                         f"  Groq [{model}] {resp.status_code} ({resp.reason_phrase}), "
-                        f"backing off {wait:.0f}s (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                        f"backing off {wait:.0f}s (attempt {attempt + 1}/{retries})"
                     )
                     last_error = httpx.HTTPStatusError(
                         f"{resp.status_code} {resp.reason_phrase}", request=resp.request, response=resp
@@ -126,7 +154,7 @@ def _call_one_model(model: str, body: dict, api_key: str) -> tuple[dict | None, 
                 wait = BACKOFF_BASE_SECONDS * (2 ** attempt)
                 print(
                     f"  Groq [{model}] unusable response ({type(exc).__name__}), "
-                    f"retrying in {wait:.0f}s (attempt {attempt + 1}/{RETRIES_PER_MODEL})"
+                    f"retrying in {wait:.0f}s (attempt {attempt + 1}/{retries})"
                 )
                 time.sleep(wait)
             except httpx.HTTPStatusError as exc:
@@ -176,7 +204,7 @@ def generate_json(
 
     last_error: Exception | None = None
     for model in GROQ_MODELS:
-        data, error = _call_one_model(model, body, api_key)
+        data, error = _call_one_model(model, body, api_key, retries=RETRIES_PER_MODEL)
         if data is not None:
             time.sleep(PACING_SECONDS_AFTER_SUCCESS)
             content = data["choices"][0]["message"]["content"]
@@ -226,6 +254,14 @@ def chat_with_browser_search(
     free-form; parse it tolerantly (see contact_verification.py) rather
     than relying on schema enforcement, same approach already used for
     Gemini's grounding in gemini_client.py.
+
+    Uses fewer retries and a capped wait per attempt than generate_json --
+    a live run showed a single browser_search call triggering a 455s
+    server-suggested retry-after (heavy token usage from search results
+    against the free tier's 8K tokens/minute budget). Honoring that fully
+    would make a fallback-heavy run take hours; BROWSER_SEARCH_MAX_WAIT_SECONDS
+    caps each wait so a call either succeeds quickly or gives up and the
+    caller gets a blank Contact, rather than blocking the whole pipeline.
     """
     messages = []
     if system_instruction:
@@ -242,7 +278,11 @@ def chat_with_browser_search(
 
     last_error: Exception | None = None
     for model in models:
-        data, error = _call_one_model(model, body, api_key)
+        data, error = _call_one_model(
+            model, body, api_key,
+            retries=BROWSER_SEARCH_RETRIES_PER_MODEL,
+            max_wait_seconds=BROWSER_SEARCH_MAX_WAIT_SECONDS,
+        )
         if data is not None:
             time.sleep(PACING_SECONDS_AFTER_SUCCESS)
             message = data["choices"][0]["message"]

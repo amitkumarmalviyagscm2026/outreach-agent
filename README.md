@@ -122,9 +122,37 @@ models, which were separately decommissioned on 2026-09-21 and would not
 have worked either. It needs `GROQ_API_KEY` (see Setup) -- without it,
 there's no contact-search fallback at all, only Crustdata.
 
-⚠️ **This has not yet been exercised against the live API.** If a run
-reaches the fallback (its log line starts with "Switching to the free Groq
-Search fallback") and it's misbehaving, check the log for:
+**Live-tested 2026-09-30 and it works** -- a real run found and verified
+both an HR/TA and an Ops/SCM contact via citation. Two things the first
+live run surfaced and fixed:
+
+- **Speed.** A single fallback company took 13m49s -- `browser_search`
+  pulls a lot of web content into context, and one call alone triggered a
+  455-second server-suggested `retry-after` against the free tier's 8K
+  tokens/minute budget. Honoring that in full would make a fallback-heavy
+  run (e.g. Crustdata exhausted early in a 100-company run) take many
+  hours, well past the 90-minute job timeout. `groq_client.py` now caps
+  each retry wait at `BROWSER_SEARCH_MAX_WAIT_SECONDS` (45s) with fewer
+  retries, trading a lower per-call success rate under heavy load for a
+  run that actually finishes -- a call that still fails just returns a
+  blank Contact rather than blocking the whole run. This still doesn't
+  make the fallback viable for dozens of companies in one run; treat it as
+  a backstop for a handful of stragglers, not a bulk substitute for
+  Crustdata credits.
+- **Two unrelated bugs the real output caught**, both fixed the same day:
+  `infer_honorific()`'s curated name lists were missing common names (a
+  found contact named "Rishi" or "Nishit" got no honorific at all,
+  silently falling back to first-name-only) -- lists substantially
+  expanded in `templates.py`. And `qa.py`'s `PLACEHOLDER_PATTERNS` still
+  had a bare `\bGSCM\b` check left over from when drafting was LLM-based;
+  since templates.py now deliberately writes "GSCM" in every follow-up's
+  intro and signature, that check flagged **100% of real follow-ups** as
+  having a "leftover placeholder token" -- removed, with a regression test
+  (`test_real_template_output_passes_qa_cleanly`) pinning down real
+  template output passing QA cleanly.
+
+If a run reaches the fallback (its log line starts with "Switching to the
+free Groq Search fallback") and it's misbehaving, check the log for:
 
 - **`unparseable response`** -- the model didn't return valid JSON (or
   didn't wrap it the way `parse_json_loosely` expects). The log prints the

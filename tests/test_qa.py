@@ -1,5 +1,21 @@
 from src.config import CONNECTION_NOTE_MAX_CHARS
 from src.qa import validate_contact_messages
+from src.templates import build_connection_note, build_follow_up
+
+
+def test_real_template_output_passes_qa_cleanly():
+    """Regression test for a real bug: PLACEHOLDER_PATTERNS used to include
+    a bare "GSCM" check meant to catch an LLM leaving that abbreviation
+    unexpanded. Once drafting moved to fixed templates, "GSCM" became
+    deliberate, fixed text in every follow-up ("GSCM Placement
+    Coordinator", "IIM Udaipur GSCM" in the signature) -- so that pattern
+    flagged 100% of real follow-ups. A live run's QA_FLAG column caught
+    this; this test pins it down so it can't silently come back."""
+    note = build_connection_note("Rishi Kohli", "hr_ta")
+    follow_up = build_follow_up("Rishi Kohli", "HR Manager", "Acme Ltd", "hr_ta")
+    result = validate_contact_messages(note, follow_up, "https://www.linkedin.com/in/rishi")
+    assert result.ok
+    assert result.flags == []
 
 
 def test_clean_message_passes():
@@ -37,15 +53,6 @@ def test_placeholder_token_fails():
     )
     assert not result.ok
     assert any("placeholder" in f for f in result.flags)
-
-
-def test_unexpanded_gscm_fails():
-    result = validate_contact_messages(
-        "As a GSCM student I'd love to connect.",
-        "Thanks for connecting.",
-        "https://www.linkedin.com/in/x",
-    )
-    assert not result.ok
 
 
 def test_bare_initial_greeting_fails():

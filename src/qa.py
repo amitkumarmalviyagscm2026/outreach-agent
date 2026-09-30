@@ -21,7 +21,12 @@ PLACEHOLDER_PATTERNS = [
     re.compile(r"\[[A-Za-z ]+\]"),          # [Company]
     re.compile(r"<[a-zA-Z_]+>"),            # <title>
     re.compile(r"\bTBD\b"),
-    re.compile(r"\bGSCM\b"),                # unexpanded abbreviation
+    # NOTE: a "\bGSCM\b" pattern used to live here, meant to catch an LLM
+    # leaving that abbreviation unexpanded. Removed -- once drafting moved
+    # to fixed templates (templates.py), "GSCM" became deliberate, fixed
+    # text in EVERY follow-up ("GSCM Placement Coordinator", "IIM Udaipur
+    # GSCM" in the signature), so this pattern flagged 100% of follow-ups
+    # as a false positive. Caught via a real run's QA_FLAG column.
 ]
 
 LINKEDIN_URL_PATTERN = re.compile(r"^https://(www\.)?linkedin\.com/.+", re.IGNORECASE)
